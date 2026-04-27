@@ -1,0 +1,15 @@
+{
+  "name": "autonomous-governance-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Governance guardrail for autonomous agents: policy evaluation, escalation, blocking, and audit logging.",
+  "type": "module",
+  "scripts": {
+    "check": "node src/check.mjs",
+    "policy": "node src/cli.mjs policy",
+    "evaluate": "node src/cli.mjs evaluate samples/action.json",
+    "dev": "node src/server.mjs",
+    "test": "node src/check.mjs && node src/cli.mjs policy && node src/cli.mjs evaluate samples/action.json"
+  },
+  "license": "MIT"
+}

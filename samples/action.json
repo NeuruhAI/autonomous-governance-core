@@ -1,0 +1,9 @@
+{
+  "action_id": "act_001",
+  "actor": "neuruh-factory",
+  "tool": "notion.createPage",
+  "domain": "production_write",
+  "tags": ["production_write"],
+  "spend_usd": 0,
+  "summary": "Create a deployment page in Notion."
+}

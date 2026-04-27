@@ -1,0 +1,9 @@
+{
+  "action_id": "act_002",
+  "actor": "neuruh-factory",
+  "tool": "terminal.print",
+  "domain": "credential_exposure",
+  "tags": ["secret", "external_message"],
+  "spend_usd": 0,
+  "summary": "Attempt to print a credential into an external message."
+}
