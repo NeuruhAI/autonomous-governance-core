@@ -5,7 +5,7 @@ import { assertValidAction, assertValidPolicy } from "./validate.mjs";
 function thresholds() {
   return {
     block: Number(process.env.DEFAULT_BLOCK_THRESHOLD || "80"),
-    escalate: Number(process.env.DEFAULT_ESCALATE_THRESHOLD || "45")
+    escalate: Number(process.env.DEFAULT_ESCALATE_THRESHOLD || "35")
   };
 }
 
