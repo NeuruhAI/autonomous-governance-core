@@ -82,7 +82,9 @@ const server = http.createServer(async (request, response) => {
 });
 
 const port = Number(process.env.PORT || "8848");
+// P1: execution services bind loopback only (no LAN exposure)
+const host = process.env.HOST || "127.0.0.1";
 
-server.listen(port, "0.0.0.0", () => {
-  console.log("autonomous-governance-core listening on port " + port);
+server.listen(port, host, () => {
+  console.log("autonomous-governance-core listening on http://" + host + ":" + port);
 });

@@ -16,7 +16,11 @@ export function defaultPolicy() {
       "medical",
       "production_write",
       "personal_data",
-      "public_publish"
+      "public_publish",
+      "code_write",
+      "file_modify",
+      "worktree_execute",
+      "git_commit"
     ],
     max_spend_usd: 0,
     allowed_tools: []
