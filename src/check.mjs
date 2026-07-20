@@ -15,6 +15,12 @@ const requiredFiles = [
   "src/cli.mjs",
   "src/server.mjs",
   "src/check.mjs",
+  "src/canonical.mjs",
+  "src/trust.mjs",
+  "src/receipts.mjs",
+  "src/approval.mjs",
+  "src/consumption.mjs",
+  "src/decision.mjs",
   "samples/action.json",
   "samples/blocked-action.json"
 ];
@@ -44,6 +50,11 @@ const sampleDecision = evaluateAction(sampleAction);
 if (sampleDecision.decision !== "escalate") {
   console.error("Expected sample action to escalate.");
   console.error(JSON.stringify(sampleDecision, null, 2));
+  process.exit(1);
+}
+
+if (!sampleDecision.policy_version || !sampleDecision.policy_id) {
+  console.error("Expected decision to carry policy_id and policy_version (UP-2 authority reference).");
   process.exit(1);
 }
 

@@ -6,6 +6,44 @@ Governance guardrail for autonomous agent actions.
 
 This repo evaluates proposed autonomous actions before they run.
 
+## UP-2: content-bound authority
+
+Beyond the legacy evaluate path, the repo carries a canonical decision
+boundary (`src/decision.mjs`) closing Governance UP-2:
+
+- One canonical decision envelope (`gov.decision.v1`): identity, source SHA,
+  mission/plan/step, correlation/causation, operation, tool, mutation class,
+  exact target, canonical argument/request hashes, precondition hash,
+  capability, nonce, expiry, one-time-use state, evidence refs and a
+  hash-chained receipt.
+- Content-bound approvals (`src/approval.mjs`): an approval authorizes exactly
+  one canonical request. Any changed bound field, wildcard, expiry breach,
+  forged or self-referential approver invalidates it. Approver identity and
+  HMAC secrets come from trusted configuration (`src/trust.mjs`), never from
+  the request.
+- Replay resistance (`src/consumption.mjs`): durable hash-chained nonce
+  consumption, atomic one-time use, uncertain consumption never treated as
+  unused.
+- Fail-closed boundary: unknown identity, SHA, policy version, capability,
+  mutation class, ambiguous target/canonicalization, missing config, broken
+  chains or failed persistence all deny.
+- Receipts (`src/receipts.mjs`): append-only, tamper-evident, and never claim
+  execution. Governance decides; AXON executes.
+
+Legacy UP-2 hardening: caller-supplied policy overrides are ignored (env-gated
+`GOVERNANCE_ALLOW_CALLER_POLICY`, default off), every evaluation echoes
+`policy_id`/`policy_version`/`thresholds`, and decisions append to a durable
+hash-chained audit log when `GOVERNANCE_AUDIT_LOG` is set. The
+`/v1/evaluate` decision enum stays `allow | escalate | block`.
+
+The `/v2/decide` endpoint stays closed unless `GOVERNANCE_DECISION_ENABLED=1`
+AND a valid `GOVERNANCE_TRUST_CONFIG` loads. Live mutation is denied
+unconditionally: the mutation path is not ratified.
+
+Run the UP-2 suites:
+
+    npm run test:unit
+
 It can:
 
 - Load a default governance policy.

@@ -1,5 +1,5 @@
 import { recordDecision } from "./audit.mjs";
-import { defaultPolicy, mergePolicy } from "./policy.mjs";
+import { defaultPolicy, mergePolicy, policyVersion } from "./policy.mjs";
 import { assertValidAction, assertValidPolicy } from "./validate.mjs";
 
 function thresholds() {
@@ -9,12 +9,9 @@ function thresholds() {
   };
 }
 
-export function evaluateAction(action, policyOverride) {
-  const policy = mergePolicy(defaultPolicy(), policyOverride);
-
-  assertValidAction(action);
-  assertValidPolicy(policy);
-
+// Pure policy scoring: no audit write, no clock, no randomness. The legacy
+// evaluate path and the v2 decision boundary share these exact semantics.
+export function scoreAction(action, policy, gate = thresholds()) {
   const reasons = [];
   let risk = 0;
 
@@ -50,7 +47,6 @@ export function evaluateAction(action, policyOverride) {
   }
 
   const score = Math.min(100, risk);
-  const gate = thresholds();
 
   let decision = "allow";
 
@@ -60,13 +56,28 @@ export function evaluateAction(action, policyOverride) {
     decision = "escalate";
   }
 
+  return {
+    decision,
+    risk_score: score,
+    thresholds: gate,
+    reasons: reasons.length ? reasons : ["No policy violations detected."]
+  };
+}
+
+export function evaluateAction(action, policyOverride) {
+  const policy = mergePolicy(defaultPolicy(), policyOverride);
+
+  assertValidAction(action);
+  assertValidPolicy(policy);
+
+  const outcome = scoreAction(action, policy);
   const requiredNextSteps = [];
 
-  if (decision === "block") {
+  if (outcome.decision === "block") {
     requiredNextSteps.push("Stop the action.");
     requiredNextSteps.push("Record the policy reason.");
     requiredNextSteps.push("Human owner must approve any override.");
-  } else if (decision === "escalate") {
+  } else if (outcome.decision === "escalate") {
     requiredNextSteps.push("Pause before execution.");
     requiredNextSteps.push("Get human approval if action affects users, money, data, production, or public messaging.");
     requiredNextSteps.push("Log approval decision before continuing.");
@@ -74,12 +85,22 @@ export function evaluateAction(action, policyOverride) {
     requiredNextSteps.push("Proceed with normal logging.");
   }
 
-  return recordDecision(action, {
+  const record = {
     action_id: action.action_id,
-    decision,
-    risk_score: score,
-    thresholds: gate,
-    reasons: reasons.length ? reasons : ["No policy violations detected."],
+    decision: outcome.decision,
+    risk_score: outcome.risk_score,
+    thresholds: outcome.thresholds,
+    // UP-2: every decision carries its authority reference.
+    policy_id: policy.policy_id,
+    policy_version: policyVersion(policy),
+    reasons: outcome.reasons,
     required_next_steps: requiredNextSteps
-  });
+  };
+
+  // UP-2 additive correlation fields, echoed when the caller provides them.
+  if (typeof action.correlation_id === "string") record.correlation_id = action.correlation_id;
+  if (typeof action.tenant === "string") record.tenant = action.tenant;
+  if (typeof action.principal === "string") record.principal = action.principal;
+
+  return recordDecision(action, record);
 }

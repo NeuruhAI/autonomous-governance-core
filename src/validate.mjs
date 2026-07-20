@@ -67,6 +67,13 @@ export function validateAction(action) {
     errors.push("summary is required.");
   }
 
+  // UP-2 additive correlation fields (optional, string when provided).
+  for (const field of ["correlation_id", "tenant", "principal"]) {
+    if (action[field] !== undefined && typeof action[field] !== "string") {
+      errors.push(field + " must be a string when provided.");
+    }
+  }
+
   return errors;
 }
 

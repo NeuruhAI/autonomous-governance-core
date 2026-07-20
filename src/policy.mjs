@@ -1,3 +1,5 @@
+import { hashCanonical } from "./canonical.mjs";
+
 export function defaultPolicy() {
   return {
     policy_id: "default",
@@ -25,6 +27,12 @@ export function defaultPolicy() {
     max_spend_usd: 0,
     allowed_tools: []
   };
+}
+
+// The policy version is the content hash of the applied policy: every decision
+// carries an authority reference that changes when the ruleset changes.
+export function policyVersion(policy) {
+  return hashCanonical(policy);
 }
 
 export function mergePolicy(basePolicy, overridePolicy) {
