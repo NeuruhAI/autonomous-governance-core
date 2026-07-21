@@ -104,6 +104,20 @@ export function validateTrustConfig(config) {
       if (!AUTHORITY_CLASSES.includes(operation.min_authority_class)) {
         throw new TrustConfigError("operation " + toolId + "." + operationId + " min_authority_class is unknown.");
       }
+
+      // Optional per-operation allowlists. When present they PIN the decision
+      // purpose: requests outside them are denied. Purely additive strictness.
+      if (operation.repositories !== undefined && (!Array.isArray(operation.repositories) || operation.repositories.length === 0 || !operation.repositories.every((repo) => typeof repo === "string" && repo.length > 0))) {
+        throw new TrustConfigError("operation " + toolId + "." + operationId + " repositories must be a non-empty string list when provided.");
+      }
+
+      if (operation.domains !== undefined && (!Array.isArray(operation.domains) || operation.domains.length === 0 || !operation.domains.every((domain) => typeof domain === "string" && domain.length > 0))) {
+        throw new TrustConfigError("operation " + toolId + "." + operationId + " domains must be a non-empty string list when provided.");
+      }
+
+      if (operation.targets !== undefined && (!Array.isArray(operation.targets) || operation.targets.length === 0 || !operation.targets.every((target) => target && typeof target === "object" && !Array.isArray(target) && typeof target.type === "string" && target.type.length > 0 && typeof target.id === "string" && target.id.length > 0))) {
+        throw new TrustConfigError("operation " + toolId + "." + operationId + " targets must be a non-empty {type,id} list when provided.");
+      }
     }
   }
 

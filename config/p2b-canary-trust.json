@@ -1,0 +1,33 @@
+{
+  "config_version": "gov.trust.v1",
+  "_purpose": "Canonical P2-B read-only canary trust configuration. Admits exactly ONE decision: the founder-runtime organism-status read-only observation at authority class A0. No approvers exist, so no approval-gated (A2+) decision can ever verify; the only admitted operation is read_only; live mutation stays sealed. implementation_sha is a placeholder the launcher stamps with the verified git HEAD at start (scripts/p2b-decision-runtime.sh).",
+  "implementation_sha": "RESOLVED_AT_LAUNCH",
+  "expected_source_shas": {
+    "founder_runtime": ["a08f4abb908db02db1829730790140946504450c"]
+  },
+  "approvers": {},
+  "components": {
+    "founder_runtime": {
+      "capabilities": ["observe"],
+      "max_authority_class": "A0"
+    }
+  },
+  "tools": {
+    "observe": {
+      "operations": {
+        "organism_status": {
+          "mutation_class": "read_only",
+          "capability": "observe",
+          "min_authority_class": "A0",
+          "repositories": ["NeuruhAI/recipe-engine"],
+          "domains": ["organism_status"],
+          "targets": [{ "type": "observation", "id": "organism_status" }]
+        }
+      }
+    }
+  },
+  "approval_max_ttl_seconds": 900,
+  "request_max_age_seconds": 300,
+  "decision_ttl_seconds": 300,
+  "runtime": { "mode": "live", "mutation_ratified": false }
+}

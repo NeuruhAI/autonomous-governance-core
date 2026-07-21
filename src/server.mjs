@@ -45,21 +45,29 @@ function callerPolicyAllowed() {
 }
 
 // The v2 decision boundary is closed unless explicitly enabled AND a valid
-// trust configuration loads. Any configuration problem keeps it closed.
+// trust configuration loads AND the server binds loopback. Any configuration
+// problem keeps it closed.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const configuredHost = process.env.HOST || "127.0.0.1";
+
 let decisionRuntime = null;
 let decisionRuntimeError = "Decision endpoint is disabled (GOVERNANCE_DECISION_ENABLED != 1).";
 
 if (process.env.GOVERNANCE_DECISION_ENABLED === "1") {
-  try {
-    decisionRuntime = createDecisionRuntime({
-      config: loadTrustConfig(process.env),
-      receiptsPath: process.env.GOVERNANCE_RECEIPTS_LOG,
-      consumptionPath: process.env.GOVERNANCE_CONSUMPTION_LOG
-    });
-    decisionRuntimeError = null;
-  } catch (error) {
-    decisionRuntime = null;
-    decisionRuntimeError = "Decision boundary failed closed: " + error.message;
+  if (!LOOPBACK_HOSTS.has(configuredHost)) {
+    decisionRuntimeError = "Decision boundary failed closed: decision runtime requires loopback binding, got HOST=" + configuredHost + ".";
+  } else {
+    try {
+      decisionRuntime = createDecisionRuntime({
+        config: loadTrustConfig(process.env),
+        receiptsPath: process.env.GOVERNANCE_RECEIPTS_LOG,
+        consumptionPath: process.env.GOVERNANCE_CONSUMPTION_LOG
+      });
+      decisionRuntimeError = null;
+    } catch (error) {
+      decisionRuntime = null;
+      decisionRuntimeError = "Decision boundary failed closed: " + error.message;
+    }
   }
 }
 
@@ -78,6 +86,19 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/v1/policy/default") {
       sendJson(response, 200, defaultPolicy());
+      return;
+    }
+
+    // P2-B read contract: the live adapter reads the applied policy version
+    // here (subset-tolerant on its side; policy_version is the required key).
+    if (request.method === "GET" && url.pathname === "/v1/policy") {
+      const policy = defaultPolicy();
+      sendJson(response, 200, {
+        ok: true,
+        service: "autonomous-governance-core",
+        policy_id: policy.policy_id,
+        policy_version: policyVersion(policy)
+      });
       return;
     }
 
@@ -125,7 +146,7 @@ const server = http.createServer(async (request, response) => {
 
 const port = Number(process.env.PORT || "8848");
 // P1: execution services bind loopback only (no LAN exposure)
-const host = process.env.HOST || "127.0.0.1";
+const host = configuredHost;
 
 server.listen(port, host, () => {
   console.log("autonomous-governance-core listening on http://" + host + ":" + port);

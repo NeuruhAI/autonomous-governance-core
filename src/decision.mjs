@@ -381,6 +381,16 @@ export function decideRequest(runtime, request, approvals = []) {
     return deny("REPOSITORY_MISMATCH", requestHash, ["Repository is not authorized for this operation."]);
   }
 
+  // Purpose pinning: when the trusted operation declares admitted domains or
+  // targets, anything outside them is an altered decision purpose — deny.
+  if (Array.isArray(operation.domains) && !operation.domains.includes(request.domain)) {
+    return deny("DOMAIN_MISMATCH", requestHash, ["Domain is not admitted for this operation."]);
+  }
+
+  if (Array.isArray(operation.targets) && !operation.targets.some((admitted) => admitted.type === request.target.type && admitted.id === request.target.id)) {
+    return deny("TARGET_NOT_ADMITTED", requestHash, ["Target is not admitted for this operation."]);
+  }
+
   if (request.target.id.includes("*") || request.target.type.includes("*")) {
     return deny("TARGET_AMBIGUOUS", requestHash, ["Wildcard targets are refused."]);
   }
