@@ -1,0 +1,70 @@
+{
+  "receipt": "governance_v2_test_receipt",
+  "schema_version": "gov.test.receipt.v1",
+  "branch": "policy/risk-scoped-founder-grants-20260816",
+  "base_head": "714ace36922d815253464df815eb291e4118808d",
+  "tested_commit": "5490a5d2f0b38d157698a985a4dbcfa827b82ded",
+  "run_at": "2026-08-17T00:06:37Z",
+  "command": "npm test",
+  "command_detail": "node src/check.mjs && node src/cli.mjs policy && node src/cli.mjs evaluate samples/action.json && node --test tests/*.test.mjs",
+  "result": {
+    "exit_code": 0,
+    "tests": 149,
+    "pass": 149,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0
+  },
+  "log_sha256": "c1ef3a77bb6ad47819c13a60e4d56283d1bfc33f52bac150a52ee7ab957c81f4",
+  "suites": {
+    "pre_existing_preserved": [
+      "tests/canonical.test.mjs",
+      "tests/decision.test.mjs",
+      "tests/receipts.test.mjs",
+      "tests/approval.test.mjs",
+      "tests/nonregression.test.mjs",
+      "tests/concurrency.test.mjs",
+      "tests/adversarial.test.mjs",
+      "tests/replay.test.mjs",
+      "tests/p2b-runtime.test.mjs"
+    ],
+    "new_v2_courts": [
+      "tests/pathscope.test.mjs",
+      "tests/grants.test.mjs",
+      "tests/risk.test.mjs",
+      "tests/authorize.test.mjs"
+    ]
+  },
+  "required_matrix": {
+    "read_qdrant": "ALLOW (AUTO_ALLOW_OBSERVE, R0, receipted)",
+    "proof_artifact_write_under_valid_grant": "ALLOW (GRANT_BOUNDED_LOCAL, R1)",
+    "second_write_same_approved_scope": "ALLOW without new founder prompt",
+    "reversible_alias_repair_under_explicit_grant": "ALLOW (GRANT_BOUNDED_LOCAL, rollback plan bound)",
+    "feature_branch_edit": "ALLOW (GRANT_BOUNDED_DEVELOPMENT, R2)",
+    "normal_feature_push": "ALLOW (GRANT_BOUNDED_DEVELOPMENT, R2)",
+    "path_escape": "DENY (PATH_ESCAPE)",
+    "symlink_escape": "DENY (PATH_ESCAPE, real-path resolution)",
+    "private_key_path": "DENY (SECRET_ROOT_DENIED, canonical policy; grant and approval both refused)",
+    "seller_sms": "FOUNDER_REQUIRED (FOUNDER_REQUIRED_EXTERNAL, R4, approve-once only)",
+    "spend_100_usd": "FOUNDER_REQUIRED (FOUNDER_REQUIRED_EXTERNAL, R4)",
+    "production_db_delete": "FOUNDER_REQUIRED (FOUNDER_REQUIRED_DESTRUCTIVE, R5, session approval refused)",
+    "force_push": "FOUNDER_REQUIRED (FOUNDER_REQUIRED_DESTRUCTIVE, R5, even inside granted repo)",
+    "qualified_exact_label_restart_under_explicit_grant": "ALLOW (GRANT_QUALIFIED_ADOPTION, R3, no re-prompt)",
+    "same_restart_without_grant": "FOUNDER_REQUIRED (asked once; identical scope re-ask returns same prompt_id)",
+    "expired_grant": "FOUNDER_REQUIRED (GRANT_EXPIRED, expiry named in prompt)",
+    "wrong_lane_or_repo": "DENY (GRANT_LANE_MISMATCH / GRANT_REPO_MISMATCH)",
+    "stale_runtime_identity": "FAIL CLOSED (SOURCE_SHA_SUPERSEDED with superseding SHA named; stale config pin refused at load as STALE_SOURCE_PIN)",
+    "current_qualified_runtime_identity": "PASS (e64c545adccf47394b1e45e860751816753617b4 allows the canonical canary decision)"
+  },
+  "identity": {
+    "component": "founder_runtime",
+    "qualified_sha": "e64c545adccf47394b1e45e860751816753617b4",
+    "superseded_sha": "a08f4abb908db02db1829730790140946504450c",
+    "model": "source SHA pin + explicit qualification lineage (source_lineage in gov.trust.v1)"
+  },
+  "live_runtime": {
+    "mutated": false,
+    "detail": "127.0.0.1:8848 (pid running from this checkout) not restarted or reconfigured; .p2b-runtime untouched; test launches isolated via GOVERNANCE_RUNTIME_DIR"
+  },
+  "execution": "NOT_CLAIMED_BY_GOVERNANCE"
+}
