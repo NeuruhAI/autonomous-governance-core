@@ -1,0 +1,52 @@
+{
+  "config_version": "gov.trust.v1",
+  "_purpose": "Governance V2 adoption trust configuration. Identical to the canonical P2-B canary config on the /v2/decide surface (one A0 read-only observation; live mutation sealed) PLUS one authorize-side founder approver so /v2/authorize can verify FounderGrants and founder approvals. The founder secret is a placeholder the adoption launcher stamps from GOVERNANCE_FOUNDER_SECRET at start and refuses to launch without (scripts/governance-v2-adoption-runtime.sh). Adding this approver opens NOTHING on /v2/decide: the only admitted operation is A0 read_only (needs no approval) and the unratified mutation seal denies live mutation regardless of approvals.",
+  "_identity_contract": "expected_source_shas pins the git source SHA the requesting component honestly attests. source_lineage is the qualification history behind that pin: when the Founder Runtime advances, the new SHA is qualified here and the old one marked superseded — the pin is then REQUIRED to move (a config still pinning a superseded SHA is refused at validation as STALE_SOURCE_PIN, and a request presenting a superseded SHA is denied SOURCE_SHA_SUPERSEDED with the superseding SHA named). Identity is never falsified and never silently stale.",
+  "implementation_sha": "RESOLVED_AT_LAUNCH",
+  "expected_source_shas": {
+    "founder_runtime": ["e64c545adccf47394b1e45e860751816753617b4"]
+  },
+  "source_lineage": {
+    "founder_runtime": [
+      {
+        "sha": "a08f4abb908db02db1829730790140946504450c",
+        "status": "superseded",
+        "qualified_at": "2026-07-22T00:00:00Z",
+        "superseded_by": "e64c545adccf47394b1e45e860751816753617b4"
+      },
+      {
+        "sha": "e64c545adccf47394b1e45e860751816753617b4",
+        "status": "qualified",
+        "qualified_at": "2026-08-16T21:09:58Z"
+      }
+    ]
+  },
+  "approvers": {
+    "founder": { "secret": "RESOLVED_AT_LAUNCH", "enhanced": true }
+  },
+  "components": {
+    "founder_runtime": {
+      "capabilities": ["observe"],
+      "max_authority_class": "A0"
+    }
+  },
+  "tools": {
+    "observe": {
+      "operations": {
+        "organism_status": {
+          "mutation_class": "read_only",
+          "capability": "observe",
+          "min_authority_class": "A0",
+          "repositories": ["NeuruhAI/recipe-engine"],
+          "domains": ["organism_status"],
+          "targets": [{ "type": "observation", "id": "organism_status" }]
+        }
+      }
+    }
+  },
+  "approval_max_ttl_seconds": 900,
+  "request_max_age_seconds": 300,
+  "decision_ttl_seconds": 300,
+  "grant_max_ttl_seconds": 2592000,
+  "runtime": { "mode": "live", "mutation_ratified": false }
+}
