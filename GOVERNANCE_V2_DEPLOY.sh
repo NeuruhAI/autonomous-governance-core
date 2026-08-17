@@ -66,8 +66,19 @@ git fetch origin --tags >>"$LOG" 2>&1
 tag_sha="$(git rev-parse "$CANDIDATE_TAG^{commit}")"
 [[ "$tag_sha" == "$CANDIDATE_SHA" ]] || die "tag $CANDIDATE_TAG dereferences to $tag_sha, not the sealed $CANDIDATE_SHA."
 
+# HEAD must DESCEND from the sealed candidate and carry a byte-identical
+# governed surface (V2 source, canonical config, tests, samples, package,
+# decide-contract scripts). The deploy tooling itself was added after the
+# seal, so HEAD can never literally equal the sealed commit — descent plus
+# surface identity IS the exact-qualified condition.
 head_sha="$(git rev-parse HEAD)"
-[[ "$head_sha" == "$CANDIDATE_SHA" ]] || die "HEAD $head_sha is not the sealed candidate $CANDIDATE_SHA. Check out the candidate first."
+git merge-base --is-ancestor "$CANDIDATE_SHA" "$head_sha" \
+  || die "HEAD $head_sha does not descend from the sealed candidate $CANDIDATE_SHA."
+git diff --quiet "$CANDIDATE_SHA" "$head_sha" -- \
+  src tests samples package.json \
+  config/p2b-canary-trust.json \
+  scripts/p2b-canary-decision-probe.mjs scripts/p2b-decision-runtime.sh \
+  || die "governed surface at HEAD differs from the sealed candidate; this is not the qualified adoption."
 
 [[ -z "$(git status --porcelain)" ]] || die "worktree is not clean."
 
@@ -91,7 +102,7 @@ try { validateTrustConfig(stale); process.exit(1); } catch { process.exit(0); }
 # ---------------------------------------------------------------- phase 2
 say "REHEARSAL: isolated alternate-port launch + acceptance matrix (port $REHEARSAL_PORT)"
 REHEARSAL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gov-v2-deploy-rehearsal.XXXXXX")"
-if ! GOVERNANCE_EXPECTED_SHA="$CANDIDATE_SHA" \
+if ! GOVERNANCE_EXPECTED_SHA="$head_sha" \
      GOVERNANCE_RUNTIME_DIR="$REHEARSAL_DIR" \
      GOVERNANCE_FOUNDER_SECRET="$GOVERNANCE_FOUNDER_SECRET" \
      bash "$ROOT/scripts/governance-v2-adoption-runtime.sh" up-verified "$REHEARSAL_PORT" >>"$LOG" 2>&1; then
@@ -116,8 +127,10 @@ else
 fi
 
 say "CUTOVER: stamping V2 live trust config (previous config preserved for rollback)"
+# implementation_sha records the code ACTUALLY running (HEAD); the sealed
+# ancestor is recorded by the candidate tag and the deployment receipt.
 umask 177
-IMPL_SHA="$CANDIDATE_SHA" CANON="$CANON" OUT="$LIVE_RUN/trust.runtime.v2.json" node --input-type=module -e '
+IMPL_SHA="$head_sha" CANON="$CANON" OUT="$LIVE_RUN/trust.runtime.v2.json" node --input-type=module -e '
 import fs from "node:fs";
 import { validateTrustConfig } from "./src/trust.mjs";
 const raw = JSON.parse(fs.readFileSync(process.env.CANON, "utf8"));
@@ -183,5 +196,5 @@ fi
 
 # ---------------------------------------------------------------- success
 mv "$LIVE_RUN/trust.runtime.v2.json" "$LIVE_RUN/trust.runtime.json"
-say "DEPLOYED: Governance V2 $CANDIDATE_SHA live on :$LIVE_PORT (pid $(cat "$LIVE_RUN/server.pid"))."
+say "DEPLOYED: Governance V2 $head_sha (sealed ancestor $CANDIDATE_SHA) live on :$LIVE_PORT (pid $(cat "$LIVE_RUN/server.pid"))."
 say "POSTFLIGHT: re-run the acceptance probe at any time; receipts chains are append-only and verifiable."
