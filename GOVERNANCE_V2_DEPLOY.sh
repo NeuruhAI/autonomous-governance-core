@@ -95,7 +95,7 @@ say "PRECHECK: running full test suite"
 npm test >>"$LOG" 2>&1 || die "test suite failed; see $LOG."
 
 say "PRECHECK: stale-pin refusal self-test"
-node --input-type=module -e '
+CANON="$CANON" node --input-type=module -e '
 import fs from "node:fs";
 import { validateTrustConfig } from "./src/trust.mjs";
 const stale = JSON.parse(fs.readFileSync(process.env.CANON, "utf8"));
@@ -104,7 +104,7 @@ stale.implementation_sha = "0000000000000000000000000000000000000000";
 stale.approvers.founder.secret = "selftest".repeat(4);
 stale.expected_source_shas.founder_runtime = ["a08f4abb908db02db1829730790140946504450c"];
 try { validateTrustConfig(stale); process.exit(1); } catch { process.exit(0); }
-' CANON="$CANON" || die "stale-pin refusal self-test FAILED: a stale identity pin was accepted."
+' || die "stale-pin refusal self-test FAILED: a stale identity pin was accepted."
 
 # ---------------------------------------------------------------- phase 2
 say "REHEARSAL: isolated alternate-port launch + acceptance matrix (port $REHEARSAL_PORT)"
