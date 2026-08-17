@@ -40,6 +40,20 @@ The `/v2/decide` endpoint stays closed unless `GOVERNANCE_DECISION_ENABLED=1`
 AND a valid `GOVERNANCE_TRUST_CONFIG` loads. Live mutation is denied
 unconditionally: the mutation path is not ratified.
 
+## V2: risk-scoped founder authority
+
+`/v2/authorize` (same closed-by-default gates, own chain files via
+`GOVERNANCE_AUTHORIZE_RECEIPTS_LOG` / `GOVERNANCE_AUTHORIZE_CONSUMPTION_LOG`)
+governs CONSEQUENCE, not syntax: deterministic risk tiers R0–R5
+(`src/risk.mjs`), bounded reusable FounderGrants (`src/grants.mjs`),
+path-safe scope enforcement with symlink-escape denial and secret-denied
+roots (`src/pathscope.mjs`), and a founder approval UX with approve-once /
+approve-exact-scope-for-session and no repeated identical prompts
+(`src/authorize.mjs`). Trust identity pins carry an explicit qualification
+lineage (`source_lineage` in `src/trust.mjs`): stale pins refuse to load and
+superseded runtimes are denied with a precise reason. See
+GOVERNANCE_V2_POLICY_MATRIX.md and GOVERNANCE_V2_ADOPTION.md.
+
 Run the UP-2 suites:
 
     npm run test:unit

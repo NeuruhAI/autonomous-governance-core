@@ -28,7 +28,9 @@ export function canonicalCanaryRequest({ missionId: mission, nonce, issuedAt } =
     causation_id: "cause_p2b_canary",
     requester: {
       component: "founder_runtime",
-      source_sha: "a08f4abb908db02db1829730790140946504450c"
+      // Current qualified Founder Runtime lineage (see source_lineage in
+      // config/p2b-canary-trust.json; superseded SHAs are denied precisely).
+      source_sha: "e64c545adccf47394b1e45e860751816753617b4"
     },
     authority_class: "A0",
     operation: "organism_status",

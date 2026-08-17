@@ -1,9 +1,25 @@
 {
   "config_version": "gov.trust.v1",
   "_purpose": "Canonical P2-B read-only canary trust configuration. Admits exactly ONE decision: the founder-runtime organism-status read-only observation at authority class A0. No approvers exist, so no approval-gated (A2+) decision can ever verify; the only admitted operation is read_only; live mutation stays sealed. implementation_sha is a placeholder the launcher stamps with the verified git HEAD at start (scripts/p2b-decision-runtime.sh).",
+  "_identity_contract": "expected_source_shas pins the git source SHA the requesting component honestly attests. source_lineage is the qualification history behind that pin: when the Founder Runtime advances, the new SHA is qualified here and the old one marked superseded — the pin is then REQUIRED to move (a config still pinning a superseded SHA is refused at validation as STALE_SOURCE_PIN, and a request presenting a superseded SHA is denied SOURCE_SHA_SUPERSEDED with the superseding SHA named). Identity is never falsified and never silently stale.",
   "implementation_sha": "RESOLVED_AT_LAUNCH",
   "expected_source_shas": {
-    "founder_runtime": ["a08f4abb908db02db1829730790140946504450c"]
+    "founder_runtime": ["e64c545adccf47394b1e45e860751816753617b4"]
+  },
+  "source_lineage": {
+    "founder_runtime": [
+      {
+        "sha": "a08f4abb908db02db1829730790140946504450c",
+        "status": "superseded",
+        "qualified_at": "2026-07-22T00:00:00Z",
+        "superseded_by": "e64c545adccf47394b1e45e860751816753617b4"
+      },
+      {
+        "sha": "e64c545adccf47394b1e45e860751816753617b4",
+        "status": "qualified",
+        "qualified_at": "2026-08-16T21:09:58Z"
+      }
+    ]
   },
   "approvers": {},
   "components": {

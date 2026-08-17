@@ -8,6 +8,7 @@ import {
   EVIDENCE_CLASSES,
   MUTATION_CLASSES,
   authorityRank,
+  lineageEntry,
   trustConfigFingerprint
 } from "./trust.mjs";
 import { defaultPolicy, policyVersion } from "./policy.mjs";
@@ -330,6 +331,19 @@ export function decideRequest(runtime, request, approvals = []) {
   const pinnedShas = config.expected_source_shas[request.requester.component] || [];
 
   if (!pinnedShas.includes(request.requester.source_sha)) {
+    // A superseded lineage SHA gets its precise reason: the requester is a
+    // stale runtime, not an impostor, and the message says exactly what the
+    // qualified identity is — honesty over falsification, closed over open.
+    const lineage = lineageEntry(config, request.requester.component, request.requester.source_sha);
+
+    if (lineage && lineage.status === "superseded") {
+      return deny("SOURCE_SHA_SUPERSEDED", requestHash, [
+        "Requester source SHA " + request.requester.source_sha + " is a superseded " +
+          request.requester.component + " lineage (superseded by " + lineage.superseded_by +
+          "). Re-qualify or update the requester to the qualified lineage; identity is never falsified."
+      ]);
+    }
+
     return deny("SOURCE_SHA_MISMATCH", requestHash, ["Requester source SHA is not the pinned SHA."]);
   }
 

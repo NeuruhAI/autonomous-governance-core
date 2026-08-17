@@ -53,6 +53,98 @@ export function validateTrustConfig(config) {
     }
   }
 
+  // Optional per-component source lineage: the qualification history behind
+  // the pin. Each entry records WHEN a SHA became the qualified identity and,
+  // when superseded, WHAT superseded it. The contract that keeps pins honest:
+  // expected_source_shas for a lineage-tracked component must equal exactly
+  // the set of currently-qualified lineage SHAs — a pin that still names a
+  // superseded SHA is a STALE PIN and the whole config is refused, so a stale
+  // trust configuration can never load (the boundary stays closed instead).
+  if (config.source_lineage !== undefined) {
+    requirePlainObject(config.source_lineage, "source_lineage");
+
+    for (const [component, entries] of Object.entries(config.source_lineage)) {
+      if (!(component in config.expected_source_shas)) {
+        throw new TrustConfigError("source_lineage names unpinned component: " + component);
+      }
+
+      if (!Array.isArray(entries) || entries.length === 0) {
+        throw new TrustConfigError("source_lineage for " + component + " must be a non-empty list.");
+      }
+
+      const shas = new Set();
+      const qualified = new Set();
+
+      for (const entry of entries) {
+        requirePlainObject(entry, "source_lineage entry for " + component);
+        requireString(entry.sha, "source_lineage sha for " + component);
+
+        if (entry.sha.length < 7) {
+          throw new TrustConfigError("source_lineage sha for " + component + " is too short.");
+        }
+
+        if (shas.has(entry.sha)) {
+          throw new TrustConfigError("source_lineage for " + component + " lists sha twice: " + entry.sha);
+        }
+
+        shas.add(entry.sha);
+        requireString(entry.qualified_at, "source_lineage qualified_at for " + component);
+
+        if (!Number.isFinite(Date.parse(entry.qualified_at))) {
+          throw new TrustConfigError("source_lineage qualified_at for " + component + " must be ISO-8601.");
+        }
+
+        if (entry.status === "qualified") {
+          qualified.add(entry.sha);
+        } else if (entry.status === "superseded") {
+          requireString(entry.superseded_by, "source_lineage superseded_by for " + component);
+        } else {
+          throw new TrustConfigError("source_lineage status for " + component + " must be qualified or superseded.");
+        }
+      }
+
+      for (const entry of entries) {
+        if (entry.status === "superseded" && !qualified.has(entry.superseded_by)) {
+          throw new TrustConfigError(
+            "source_lineage for " + component + ": superseded_by " + entry.superseded_by + " is not a qualified lineage SHA."
+          );
+        }
+      }
+
+      if (qualified.size === 0) {
+        throw new TrustConfigError("source_lineage for " + component + " has no qualified SHA; the component cannot be represented honestly.");
+      }
+
+      const pinned = config.expected_source_shas[component];
+
+      for (const sha of pinned) {
+        if (!qualified.has(sha)) {
+          const entry = entries.find((candidate) => candidate.sha === sha);
+
+          if (entry && entry.status === "superseded") {
+            throw new TrustConfigError(
+              "STALE_SOURCE_PIN: expected_source_shas for " + component + " pins " + sha +
+                ", which lineage marks superseded by " + entry.superseded_by +
+                ". Update the pin to the qualified lineage; do not falsify the runtime identity."
+            );
+          }
+
+          throw new TrustConfigError(
+            "expected_source_shas for " + component + " pins " + sha + ", which is not a qualified lineage SHA."
+          );
+        }
+      }
+
+      for (const sha of qualified) {
+        if (!pinned.includes(sha)) {
+          throw new TrustConfigError(
+            "expected_source_shas for " + component + " omits qualified lineage SHA " + sha + "."
+          );
+        }
+      }
+    }
+  }
+
   requirePlainObject(config.approvers, "approvers");
 
   for (const [approverId, approver] of Object.entries(config.approvers)) {
@@ -125,6 +217,10 @@ export function validateTrustConfig(config) {
     throw new TrustConfigError("approval_max_ttl_seconds must be a positive integer.");
   }
 
+  if (config.grant_max_ttl_seconds !== undefined && (!Number.isSafeInteger(config.grant_max_ttl_seconds) || config.grant_max_ttl_seconds <= 0)) {
+    throw new TrustConfigError("grant_max_ttl_seconds must be a positive integer when provided.");
+  }
+
   if (!Number.isSafeInteger(config.request_max_age_seconds) || config.request_max_age_seconds <= 0) {
     throw new TrustConfigError("request_max_age_seconds must be a positive integer.");
   }
@@ -172,6 +268,13 @@ export function loadTrustConfig(env = process.env) {
   }
 
   return validateTrustConfig(parsed);
+}
+
+// Lineage lookup for decision-time identity messages. Returns the lineage
+// entry for a component+sha, or null when no lineage tracks it.
+export function lineageEntry(config, component, sha) {
+  const entries = (config.source_lineage && config.source_lineage[component]) || [];
+  return entries.find((entry) => entry.sha === sha) || null;
 }
 
 // Fingerprint identifies the trust config in receipts without leaking secrets.

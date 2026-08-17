@@ -14,11 +14,15 @@
 #  3. Binding is hardcoded loopback (127.0.0.1); the server additionally
 #     refuses the decision runtime on any non-loopback HOST.
 #  4. down() kills only the PID this script recorded. No broad kills.
+#  5. GOVERNANCE_RUNTIME_DIR may point the runtime state (pidfile, stamped
+#     config, receipt chains) at an isolated directory so test launches can
+#     never touch a live runtime's append-only chains. Default is the
+#     canonical .p2b-runtime.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-RUN="$ROOT/.p2b-runtime"
+RUN="${GOVERNANCE_RUNTIME_DIR:-$ROOT/.p2b-runtime}"
 CANON="$ROOT/config/p2b-canary-trust.json"
 RUNTIME_CONFIG="$RUN/trust.runtime.json"
 PIDFILE="$RUN/server.pid"
@@ -68,6 +72,8 @@ up() {
   GOVERNANCE_TRUST_CONFIG="$RUNTIME_CONFIG" \
   GOVERNANCE_RECEIPTS_LOG="$RUN/receipts.jsonl" \
   GOVERNANCE_CONSUMPTION_LOG="$RUN/consumption.jsonl" \
+  GOVERNANCE_AUTHORIZE_RECEIPTS_LOG="$RUN/authorize-receipts.jsonl" \
+  GOVERNANCE_AUTHORIZE_CONSUMPTION_LOG="$RUN/authorize-consumption.jsonl" \
   GOVERNANCE_AUDIT_LOG="$RUN/audit.jsonl" \
   node src/server.mjs > "$RUN/server.log" 2>&1 &
   echo $! > "$PIDFILE"

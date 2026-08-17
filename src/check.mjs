@@ -21,6 +21,10 @@ const requiredFiles = [
   "src/approval.mjs",
   "src/consumption.mjs",
   "src/decision.mjs",
+  "src/pathscope.mjs",
+  "src/grants.mjs",
+  "src/risk.mjs",
+  "src/authorize.mjs",
   "samples/action.json",
   "samples/blocked-action.json"
 ];

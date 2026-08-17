@@ -3,6 +3,7 @@ import { listAuditLog } from "./audit.mjs";
 import { evaluateAction } from "./evaluator.mjs";
 import { defaultPolicy, policyVersion } from "./policy.mjs";
 import { createDecisionRuntime, decideRequest } from "./decision.mjs";
+import { authorizeAction, createAuthorizeRuntime } from "./authorize.mjs";
 import { loadTrustConfig } from "./trust.mjs";
 
 function readJsonBody(request) {
@@ -53,9 +54,15 @@ const configuredHost = process.env.HOST || "127.0.0.1";
 let decisionRuntime = null;
 let decisionRuntimeError = "Decision endpoint is disabled (GOVERNANCE_DECISION_ENABLED != 1).";
 
+// The risk-scoped authorize boundary shares every gate with /v2/decide and
+// keeps its OWN chain files: one chain file must never have two appenders.
+let authorizeRuntime = null;
+let authorizeRuntimeError = "Authorize endpoint is disabled (GOVERNANCE_DECISION_ENABLED != 1).";
+
 if (process.env.GOVERNANCE_DECISION_ENABLED === "1") {
   if (!LOOPBACK_HOSTS.has(configuredHost)) {
     decisionRuntimeError = "Decision boundary failed closed: decision runtime requires loopback binding, got HOST=" + configuredHost + ".";
+    authorizeRuntimeError = decisionRuntimeError;
   } else {
     try {
       decisionRuntime = createDecisionRuntime({
@@ -67,6 +74,18 @@ if (process.env.GOVERNANCE_DECISION_ENABLED === "1") {
     } catch (error) {
       decisionRuntime = null;
       decisionRuntimeError = "Decision boundary failed closed: " + error.message;
+    }
+
+    try {
+      authorizeRuntime = createAuthorizeRuntime({
+        config: loadTrustConfig(process.env),
+        receiptsPath: process.env.GOVERNANCE_AUTHORIZE_RECEIPTS_LOG,
+        consumptionPath: process.env.GOVERNANCE_AUTHORIZE_CONSUMPTION_LOG
+      });
+      authorizeRuntimeError = null;
+    } catch (error) {
+      authorizeRuntime = null;
+      authorizeRuntimeError = "Authorize boundary failed closed: " + error.message;
     }
   }
 }
@@ -128,6 +147,23 @@ const server = http.createServer(async (request, response) => {
 
       const body = await readJsonBody(request);
       sendJson(response, 200, decideRequest(decisionRuntime, body.request, body.approvals || []));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/v2/authorize") {
+      if (!authorizeRuntime) {
+        sendJson(response, 403, {
+          ok: false,
+          error: authorizeRuntimeError
+        });
+        return;
+      }
+
+      const body = await readJsonBody(request);
+      sendJson(response, 200, authorizeAction(authorizeRuntime, body.facts, {
+        grant: body.grant,
+        founder_approval: body.founder_approval
+      }));
       return;
     }
 

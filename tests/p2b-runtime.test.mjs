@@ -13,7 +13,10 @@ import { verifyChain } from "../src/receipts.mjs";
 import { canonicalCanaryRequest } from "../scripts/p2b-canary-decision-probe.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
-const RE_SHA = "a08f4abb908db02db1829730790140946504450c";
+// Current qualified Founder Runtime lineage; the prior pin is retained in
+// source_lineage as superseded and must fail closed with a precise reason.
+const RE_SHA = "e64c545adccf47394b1e45e860751816753617b4";
+const RE_SHA_SUPERSEDED = "a08f4abb908db02db1829730790140946504450c";
 const GOV_SHA = () => execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
 
 function canonicalConfig() {
@@ -66,6 +69,60 @@ test("wrong Recipe Engine SHA rejected", () => {
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_MISMATCH");
+});
+
+test("stale runtime identity fails closed with the precise superseded reason", () => {
+  const { runtime } = freshRuntime();
+  const request = canonicalCanaryRequest({});
+  request.requester = { component: "founder_runtime", source_sha: RE_SHA_SUPERSEDED };
+  const decision = decideRequest(runtime, request);
+  assert.equal(decision.decision, "deny");
+  assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
+  assert.match(decision.reasons[0], /superseded by e64c545adccf47394b1e45e860751816753617b4/);
+  assert.match(decision.reasons[0], /never falsified/);
+});
+
+test("current qualified runtime identity passes", () => {
+  const { runtime } = freshRuntime();
+  const request = canonicalCanaryRequest({});
+  assert.equal(request.requester.source_sha, RE_SHA);
+  const decision = decideRequest(runtime, request);
+  assert.equal(decision.decision, "allow");
+  assert.equal(decision.reason_code, "POLICY_ALLOW");
+});
+
+test("a config still pinning the superseded SHA is refused as a stale pin", () => {
+  const raw = JSON.parse(fs.readFileSync(path.join(repoRoot, "config", "p2b-canary-trust.json"), "utf8"));
+  raw.implementation_sha = GOV_SHA();
+  raw.expected_source_shas.founder_runtime = [RE_SHA_SUPERSEDED];
+  assert.throws(() => validateTrustConfig(raw), /STALE_SOURCE_PIN/);
+
+  // Pinning both old and new is equally stale: the superseded SHA may not
+  // reappear beside the qualified one.
+  const both = JSON.parse(fs.readFileSync(path.join(repoRoot, "config", "p2b-canary-trust.json"), "utf8"));
+  both.implementation_sha = GOV_SHA();
+  both.expected_source_shas.founder_runtime = [RE_SHA, RE_SHA_SUPERSEDED];
+  assert.throws(() => validateTrustConfig(both), /STALE_SOURCE_PIN/);
+
+  // A lineage whose qualified SHA is missing from the pin is refused too.
+  const omitted = JSON.parse(fs.readFileSync(path.join(repoRoot, "config", "p2b-canary-trust.json"), "utf8"));
+  omitted.implementation_sha = GOV_SHA();
+  omitted.source_lineage.founder_runtime.push({
+    sha: "1111111111111111111111111111111111111111",
+    status: "qualified",
+    qualified_at: "2026-08-16T00:00:00Z"
+  });
+  assert.throws(() => validateTrustConfig(omitted), /omits qualified lineage SHA/);
+});
+
+test("canonical config carries an honest lineage for the current pin", () => {
+  const config = canonicalConfig();
+  const lineage = config.source_lineage.founder_runtime;
+  const qualified = lineage.filter((entry) => entry.status === "qualified").map((entry) => entry.sha);
+  assert.deepEqual(config.expected_source_shas.founder_runtime, qualified);
+  const superseded = lineage.find((entry) => entry.sha === RE_SHA_SUPERSEDED);
+  assert.equal(superseded.status, "superseded");
+  assert.equal(superseded.superseded_by, RE_SHA);
 });
 
 test("unknown service rejected", () => {
@@ -218,9 +275,36 @@ test("disabled / unconfigured / malformed-config runtimes fail closed (403)", as
       body: JSON.stringify({ request: canonicalCanaryRequest({}) })
     });
     assert.equal(decide.status, 403, scenario.name + " must be closed");
+
+    // The risk-scoped authorize boundary shares every closed-by-default gate.
+    const authorize = await fetch(base + "/v2/authorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ facts: wireObserveFacts() })
+    });
+    assert.equal(authorize.status, 403, scenario.name + " authorize must be closed");
     child.kill("SIGTERM");
   }
 });
+
+function wireObserveFacts() {
+  return {
+    schema_version: "gov.action.facts.v1",
+    action_id: "act_wire_probe",
+    lane: "founder-runtime-lane",
+    component: "founder_runtime",
+    action_class: "query",
+    summary: "Read-only wire probe.",
+    target: { type: "service", id: "qdrant" },
+    externality: "none",
+    reversibility: "reversible",
+    blast_radius: "single_target",
+    production_effect: "read",
+    spend_usd: 0,
+    nonce: "wireprobe" + Math.random().toString(16).slice(2, 12) + Date.now().toString(16),
+    issued_at: new Date().toISOString()
+  };
+}
 
 test("non-loopback binding keeps the decision runtime closed", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gov-loop-"));
@@ -255,28 +339,31 @@ test("non-loopback binding keeps the decision runtime closed", async (t) => {
 test("launcher refuses a wrong Governance SHA; accepts the exact SHA end-to-end", async (t) => {
   const script = path.join(repoRoot, "scripts", "p2b-decision-runtime.sh");
 
+  // The launcher runs against an ISOLATED runtime dir: a test launch must
+  // never share pidfile or append-only chains with a live runtime.
+  const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), "gov-p2b-run-"));
+  const launcherEnv = { ...process.env, GOVERNANCE_RUNTIME_DIR: runtimeDir };
+
   assert.throws(() =>
     execFileSync("bash", [script, "up", "18990"], {
-      env: { ...process.env, GOVERNANCE_EXPECTED_SHA: "0000000000000000000000000000000000000000" },
+      env: { ...launcherEnv, GOVERNANCE_EXPECTED_SHA: "0000000000000000000000000000000000000000" },
       stdio: "pipe"
     })
   );
   assert.throws(() =>
-    execFileSync("bash", [script, "up", "18990"], { env: { ...process.env, GOVERNANCE_EXPECTED_SHA: "" }, stdio: "pipe" })
+    execFileSync("bash", [script, "up", "18990"], { env: { ...launcherEnv, GOVERNANCE_EXPECTED_SHA: "" }, stdio: "pipe" })
   );
 
-  // The runtime receipts chain is append-only across restarts: assert growth,
-  // not absolute length.
-  const chainPath = path.join(repoRoot, ".p2b-runtime", "receipts.jsonl");
+  const chainPath = path.join(runtimeDir, "receipts.jsonl");
   const before = verifyChain(chainPath);
-  assert.equal(before.ok, true, "pre-existing runtime chain must verify");
+  assert.equal(before.ok, true, "isolated runtime chain must verify (empty is valid)");
 
   const port = 18990;
   execFileSync("bash", [script, "up", String(port)], {
-    env: { ...process.env, GOVERNANCE_EXPECTED_SHA: GOV_SHA() },
+    env: { ...launcherEnv, GOVERNANCE_EXPECTED_SHA: GOV_SHA() },
     stdio: "pipe"
   });
-  t.after(() => { try { execFileSync("bash", [script, "down"], { stdio: "pipe" }); } catch {} });
+  t.after(() => { try { execFileSync("bash", [script, "down"], { env: launcherEnv, stdio: "pipe" }); } catch {} });
 
   const base = "http://127.0.0.1:" + port;
   assert.ok(await waitHealth(base));
@@ -310,7 +397,24 @@ test("launcher refuses a wrong Governance SHA; accepts the exact SHA end-to-end"
   assert.equal(replayBody.decision, "deny");
   assert.equal(replayBody.reason_code, "NONCE_REPLAYED");
 
-  execFileSync("bash", [script, "down"], { stdio: "pipe" });
+  // The risk-scoped authorize boundary is live behind the same gates:
+  // R0 observation auto-allows, receipted on its own chain.
+  const authorize = await fetch(base + "/v2/authorize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ facts: wireObserveFacts() })
+  });
+  const authorizeBody = await authorize.json();
+  assert.equal(authorize.status, 200);
+  assert.equal(authorizeBody.decision, "allow");
+  assert.equal(authorizeBody.reason_code, "AUTO_ALLOW_OBSERVE");
+  assert.equal(authorizeBody.risk_tier, "R0");
+  assert.equal(authorizeBody.execution, "NOT_CLAIMED_BY_GOVERNANCE");
+  const authorizeChain = verifyChain(path.join(runtimeDir, "authorize-receipts.jsonl"));
+  assert.equal(authorizeChain.ok, true);
+  assert.equal(authorizeChain.length, 1);
+
+  execFileSync("bash", [script, "down"], { env: launcherEnv, stdio: "pipe" });
   const chain = verifyChain(chainPath);
   assert.equal(chain.ok, true);
   assert.equal(chain.length, before.length + 2);
