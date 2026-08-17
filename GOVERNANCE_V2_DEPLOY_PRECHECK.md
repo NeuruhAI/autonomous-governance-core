@@ -93,6 +93,32 @@ Automatic on any cutover/semantic-gate failure, and manually re-runnable:
 5. rollback failure exits 2 with an explicit operator alarm — nothing is
    left half-up, chains are never truncated.
 
+## 5b. Supervision-aware cutover (revision, 2026-08-16, pre-execution)
+
+Discovery during adoption authorization: live governance runs under launchd
+supervision (`com.neuruh.core.governance` → `nsv-run.sh governance`), with a
+committed SHA-pinned provenance gate (`neuruh-sops/supervision/pins/
+governance.pin`), adopt-never-kill, halt semantics — and NO governance env
+vars (the supervised live surface is V1-only; `/v2/decide` is 403-closed
+today; `.p2b-runtime/trust.runtime.json` is an unused Aug-12 manual-launcher
+artifact). The originally-prepared bare-child cutover would have caused a
+supervisor `sha_mismatch` HALT and left the new server unsupervised.
+
+`GOVERNANCE_V2_DEPLOY.sh` was therefore revised BEFORE execution to cut over
+THROUGH the supervisor: verify the estate (pin==LKG, no halt, sops clean,
+supervised child owns :8848, no pre-existing env file), stamp
+`trust.runtime.v2.json` (0600, founder secret only there), write a 0600
+`~/.neuruh/env/governance.env` (paths only, no secrets), ratify the pin SHA
+to HEAD (committed in neuruh-sops), then `neuruhctl restart governance` and
+gate semantically. Automatic rollback restores the exact pre-adoption state:
+pin back to LKG (committed), env file removed (v2 boundary closed again),
+LKG checkout, supervised restart, health + 403-closed verification.
+`GOVERNANCE_LIVE_PID` is no longer used — the supervisor owns pid custody.
+The gate that required `HEAD == sealed candidate` (unsatisfiable, since the
+deploy tooling postdates the seal) was replaced by sealed-ancestor descent
+plus a byte-identical governed surface (src, tests, samples, package,
+canonical canary config, decide-contract scripts).
+
 ## 6. Operator checklist before executing deploy
 
 - [ ] T5's independent evaluation of the frozen T4 candidate is complete.

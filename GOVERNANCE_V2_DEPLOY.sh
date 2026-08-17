@@ -16,22 +16,29 @@
 #   2 REHEARSAL  — isolated alternate-port launch + FULL acceptance matrix
 #                  (scripts/governance-v2-adoption-runtime.sh up-verified);
 #                  any semantic failure aborts before live is touched.
-#   3 CUTOVER    — stop the exact current live pid (pidfile, or operator-
-#                  supplied GOVERNANCE_LIVE_PID verified to be this repo's
-#                  node src/server.mjs; never a broad kill), stamp the V2
-#                  trust config, launch on the live port with the SAME
-#                  append-only decide chain (chains are never truncated).
-#   4 SEMANTIC GATE — health + policy read + the full acceptance matrix
-#                  against the live instance (PROBE_ALLOW_LIVE=1).
-#   5 AUTO-ROLLBACK — ANY phase 3/4 failure: exact-owned down of the new
-#                  pid, checkout of GOVERNANCE_LKG_SHA, relaunch of the
-#                  previous runtime config, LKG health + canary re-verify.
+#   3 CUTOVER    — SUPERVISED exact-label cutover. Live governance runs under
+#                  launchd (com.neuruh.core.governance -> nsv-run.sh, pinned
+#                  SHA provenance gate, adopt-never-kill). The cutover goes
+#                  THROUGH the supervisor, never around it: verify the
+#                  supervision estate, stamp the V2 trust config (0600),
+#                  write the 0600 governance env file (no secrets in it),
+#                  ratify the pin SHA to HEAD in neuruh-sops (committed),
+#                  then `neuruhctl restart governance`. The respawned child
+#                  keeps the SAME append-only decide chain.
+#   4 SEMANTIC GATE — health + the full acceptance matrix against the live
+#                  instance (PROBE_ALLOW_LIVE=1).
+#   5 AUTO-ROLLBACK — ANY phase 3/4 failure: restore the pin to
+#                  GOVERNANCE_LKG_SHA (committed), remove the env file
+#                  (pre-adoption state had none: decide/authorize closed),
+#                  checkout LKG detached, `neuruhctl restart governance`,
+#                  verify LKG identity (health + /v2/decide 403-closed).
 #                  Rollback failure exits 2 with an explicit operator alarm.
 #
-# ROLLBACK CONTRACT: the pre-cutover runtime config is preserved untouched at
-# $LIVE_RUN/trust.runtime.json until success; the V2 config is stamped to
-# trust.runtime.v2.json and only renamed over the old file AFTER the semantic
-# gate passes. Receipts chains are append-only throughout; nothing is deleted.
+# ROLLBACK CONTRACT: the pre-cutover pin (== GOVERNANCE_LKG_SHA) and the
+# absence of ~/.neuruh/env/governance.env ARE the previous live state; both
+# are restored exactly. The old .p2b-runtime/trust.runtime.json (Aug-12
+# manual-launcher artifact, unused by the supervised child) is never touched.
+# Receipts chains are append-only throughout; nothing is deleted.
 # ============================================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -112,21 +119,33 @@ GOVERNANCE_RUNTIME_DIR="$REHEARSAL_DIR" bash "$ROOT/scripts/governance-v2-adopti
 say "REHEARSAL: PASS"
 
 # ---------------------------------------------------------------- phase 3
-say "CUTOVER: identifying the exact current live pid"
-live_pid=""
-if [[ -f "$LIVE_RUN/server.pid" ]] && kill -0 "$(cat "$LIVE_RUN/server.pid")" 2>/dev/null; then
-  live_pid="$(cat "$LIVE_RUN/server.pid")"
-elif [[ -n "${GOVERNANCE_LIVE_PID:-}" ]]; then
-  live_pid="$GOVERNANCE_LIVE_PID"
-  ps -o command= -p "$live_pid" | grep -q "node src/server.mjs" \
-    || die "GOVERNANCE_LIVE_PID $live_pid is not a 'node src/server.mjs' process; refusing exact-owned stop."
-  lsof -a -p "$live_pid" -d cwd 2>/dev/null | grep -q "$ROOT" \
-    || die "GOVERNANCE_LIVE_PID $live_pid does not run from $ROOT; refusing exact-owned stop."
-else
-  die "no live pidfile and no GOVERNANCE_LIVE_PID supplied; will not guess which process to stop."
-fi
+# Live governance is SUPERVISED: launchd -> nsv-run.sh governance -> node.
+# The cutover goes through the supervisor (pin ratification + neuruhctl
+# restart); we never kill around it and never launch a bare child on :8848.
+SOPS="${NSV_SOPS_DIR:-$HOME/neuruh-repos/NeuruhAI/neuruh-sops/supervision}"
+NSTATE="${NSV_STATE_DIR:-$HOME/.neuruh/supervision}"
+ENVDIR="${NSV_ENV_DIR:-$HOME/.neuruh/env}"
+PIN="$SOPS/pins/governance.pin"
+ENVFILE="$ENVDIR/governance.env"
+NEURUHCTL="$SOPS/bin/neuruhctl"
 
-say "CUTOVER: stamping V2 live trust config (previous config preserved for rollback)"
+say "CUTOVER: verifying the supervision estate"
+[[ -f "$PIN" ]] || die "supervision pin missing: $PIN"
+[[ -x "$NEURUHCTL" ]] || die "neuruhctl missing: $NEURUHCTL"
+[[ ! -e "$NSTATE/halt/governance" ]] || die "governance is HALTED in supervision; resolve and 'neuruhctl arm' first."
+grep -q "^REPO=$ROOT\$" "$PIN" || die "pin REPO does not point at $ROOT."
+pin_sha="$(sed -n 's/^SHA=//p' "$PIN")"
+[[ "$pin_sha" == "$GOVERNANCE_LKG_SHA" ]] \
+  || die "pin SHA $pin_sha != GOVERNANCE_LKG_SHA $GOVERNANCE_LKG_SHA — LKG must equal the currently-ratified pin."
+[[ -z "$(git -C "$SOPS/.." status --porcelain)" ]] || die "neuruh-sops worktree is not clean."
+[[ ! -f "$ENVFILE" ]] || die "unexpected $ENVFILE already exists; unknown custody — resolve manually."
+live_child="$(cat "$NSTATE/pids/governance.pid" 2>/dev/null || true)"
+[[ -n "$live_child" ]] && kill -0 "$live_child" 2>/dev/null \
+  || die "supervised governance child not running; deploy expects a healthy LKG runtime to cut over from."
+listener="$(lsof -nP -iTCP:"$LIVE_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+[[ "$listener" == "$live_child" ]] || die "port $LIVE_PORT holder ($listener) is not the supervised child ($live_child)."
+
+say "CUTOVER: stamping V2 live trust config (0600; secret never in env or logs)"
 # implementation_sha records the code ACTUALLY running (HEAD); the sealed
 # ancestor is recorded by the candidate tag and the deployment receipt.
 umask 177
@@ -143,48 +162,62 @@ fs.writeFileSync(process.env.OUT, JSON.stringify(raw, null, 2) + "\n");
 ' || die "V2 live config stamping failed."
 umask 022
 
-launch_live() { # $1 = trust config path, $2 = label
-  HOST="$HOST" PORT="$LIVE_PORT" \
-  GOVERNANCE_DECISION_ENABLED=1 \
-  GOVERNANCE_TRUST_CONFIG="$1" \
-  GOVERNANCE_RECEIPTS_LOG="$LIVE_RUN/receipts.jsonl" \
-  GOVERNANCE_CONSUMPTION_LOG="$LIVE_RUN/consumption.jsonl" \
-  GOVERNANCE_AUTHORIZE_RECEIPTS_LOG="$LIVE_RUN/authorize-receipts.jsonl" \
-  GOVERNANCE_AUTHORIZE_CONSUMPTION_LOG="$LIVE_RUN/authorize-consumption.jsonl" \
-  GOVERNANCE_AUDIT_LOG="$LIVE_RUN/audit.jsonl" \
-  node src/server.mjs >>"$LIVE_RUN/server-$2-$TS.log" 2>&1 &
-  echo $! > "$LIVE_RUN/server.pid"
-}
-
-stop_pid_exact() { # $1 = pid
-  kill "$1" 2>/dev/null || true
-  for _ in $(seq 1 40); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.25; done
-  kill -9 "$1" 2>/dev/null || true
-}
-
+# Deep health: served AND carrying the canonical service identity.
 wait_health() {
-  for _ in $(seq 1 40); do
-    curl -sf "http://$HOST:$LIVE_PORT/health" >/dev/null 2>&1 && return 0
-    sleep 0.25
+  local body
+  for _ in $(seq 1 60); do
+    body="$(curl -sfm 2 "http://$HOST:$LIVE_PORT/health" 2>/dev/null || true)"
+    if printf '%s' "$body" | grep -qF '"service": "autonomous-governance-core"'; then return 0; fi
+    sleep 2
   done
   return 1
 }
 
+pin_set_sha() { # $1 = sha, $2 = ratification message
+  sed -i '' "s/^SHA=.*/SHA=$1/" "$PIN"
+  git -C "$SOPS/.." add "$PIN"
+  git -C "$SOPS/.." commit -m "$2" >>"$LOG" 2>&1
+}
+
+supervised_restart() {
+  "$NEURUHCTL" restart governance >>"$LOG" 2>&1 || true
+  wait_health
+}
+
 rollback() {
-  say "AUTOMATIC ROLLBACK: stopping the new pid and restoring LKG $GOVERNANCE_LKG_SHA"
-  if [[ -f "$LIVE_RUN/server.pid" ]]; then stop_pid_exact "$(cat "$LIVE_RUN/server.pid")"; rm -f "$LIVE_RUN/server.pid"; fi
+  say "AUTOMATIC ROLLBACK: restoring LKG $GOVERNANCE_LKG_SHA under supervision"
+  pin_set_sha "$GOVERNANCE_LKG_SHA" \
+    "rollback(supervision): governance pin back to LKG $GOVERNANCE_LKG_SHA (V2 adoption semantic failure)" \
+    || { say "ROLLBACK FAILURE: cannot restore pin"; exit 2; }
+  rm -f "$ENVFILE"
   git checkout --detach "$GOVERNANCE_LKG_SHA" >>"$LOG" 2>&1 || { say "ROLLBACK FAILURE: cannot checkout LKG"; exit 2; }
-  [[ -f "$LIVE_RUN/trust.runtime.json" ]] || { say "ROLLBACK FAILURE: previous runtime config missing"; exit 2; }
-  launch_live "$LIVE_RUN/trust.runtime.json" "rollback"
-  wait_health || { say "ROLLBACK FAILURE: LKG runtime did not become healthy — OPERATOR INTERVENTION REQUIRED"; exit 2; }
-  say "ROLLED_BACK: LKG $GOVERNANCE_LKG_SHA serving on :$LIVE_PORT with the previous trust config."
+  supervised_restart || { say "ROLLBACK FAILURE: LKG runtime did not become healthy — OPERATOR INTERVENTION REQUIRED (neuruhctl status)"; exit 2; }
+  # LKG semantic identity: health identity plus the pre-adoption closed v2 boundary.
+  decide_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://$HOST:$LIVE_PORT/v2/decide" -H 'Content-Type: application/json' --data '{}')"
+  [[ "$decide_status" == "403" ]] || { say "ROLLBACK FAILURE: LKG /v2/decide expected 403, got $decide_status"; exit 2; }
+  say "ROLLED_BACK: LKG $GOVERNANCE_LKG_SHA serving on :$LIVE_PORT under supervision, v2 boundary closed as before."
   exit 1
 }
 
-say "CUTOVER: stopping exact live pid $live_pid and launching the candidate"
-stop_pid_exact "$live_pid"
-launch_live "$LIVE_RUN/trust.runtime.v2.json" "v2"
-wait_health || rollback
+say "CUTOVER: writing 0600 governance env file (no secrets; chains + config paths only)"
+mkdir -p "$ENVDIR"
+umask 177
+cat > "$ENVFILE" <<EOF
+GOVERNANCE_DECISION_ENABLED=1
+GOVERNANCE_TRUST_CONFIG=$LIVE_RUN/trust.runtime.v2.json
+GOVERNANCE_RECEIPTS_LOG=$LIVE_RUN/receipts.jsonl
+GOVERNANCE_CONSUMPTION_LOG=$LIVE_RUN/consumption.jsonl
+GOVERNANCE_AUTHORIZE_RECEIPTS_LOG=$LIVE_RUN/authorize-receipts.jsonl
+GOVERNANCE_AUTHORIZE_CONSUMPTION_LOG=$LIVE_RUN/authorize-consumption.jsonl
+GOVERNANCE_AUDIT_LOG=$LIVE_RUN/audit.jsonl
+EOF
+umask 022
+
+say "CUTOVER: ratifying pin SHA -> $head_sha and restarting under supervision"
+pin_set_sha "$head_sha" \
+  "ratify(supervision): governance pin to V2 adoption $head_sha (sealed ancestor $CANDIDATE_SHA; founder-executed GOVERNANCE_V2_DEPLOY.sh)" \
+  || { rm -f "$ENVFILE"; die "pin ratification commit failed; live untouched."; }
+supervised_restart || rollback
 
 # ---------------------------------------------------------------- phase 4
 say "SEMANTIC GATE: full acceptance matrix against the live instance"
@@ -195,6 +228,6 @@ if ! PROBE_ALLOW_LIVE=1 PROBE_FOUNDER_SECRET="$GOVERNANCE_FOUNDER_SECRET" \
 fi
 
 # ---------------------------------------------------------------- success
-mv "$LIVE_RUN/trust.runtime.v2.json" "$LIVE_RUN/trust.runtime.json"
-say "DEPLOYED: Governance V2 $head_sha (sealed ancestor $CANDIDATE_SHA) live on :$LIVE_PORT (pid $(cat "$LIVE_RUN/server.pid"))."
-say "POSTFLIGHT: re-run the acceptance probe at any time; receipts chains are append-only and verifiable."
+new_child="$(cat "$NSTATE/pids/governance.pid" 2>/dev/null || echo unknown)"
+say "DEPLOYED: Governance V2 $head_sha (sealed ancestor $CANDIDATE_SHA) live on :$LIVE_PORT under supervision (child pid $new_child)."
+say "POSTFLIGHT: 'neuruhctl status' should show governance healthy with PIN=HEAD YES; re-run the acceptance probe at any time; receipts chains are append-only and verifiable."
