@@ -1,11 +1,11 @@
 {
   "config_version": "gov.trust.v1",
   "_purpose": "Canonical P2-B read-only canary trust configuration. Admits exactly ONE decision: the founder-runtime organism-status read-only observation at authority class A0. No approvers exist, so no approval-gated (A2+) decision can ever verify; the only admitted operation is read_only; live mutation stays sealed. implementation_sha is a placeholder the launcher stamps with the verified git HEAD at start (scripts/p2b-decision-runtime.sh).",
-  "_identity_contract": "expected_source_shas pins the git source SHA the requesting component honestly attests. source_lineage is the qualification history behind that pin: when the Founder Runtime advances, the new SHA is qualified here and the old one marked superseded \u2014 the pin is then REQUIRED to move (a config still pinning a superseded SHA is refused at validation as STALE_SOURCE_PIN, and a request presenting a superseded SHA is denied SOURCE_SHA_SUPERSEDED with the superseding SHA named). Identity is never falsified and never silently stale.",
+  "_identity_contract": "expected_source_shas pins the git source SHA the requesting component honestly attests. source_lineage is the qualification history behind that pin: when the Founder Runtime advances, the new SHA is qualified here and the old one marked superseded — the pin is then REQUIRED to move (a config still pinning a superseded SHA is refused at validation as STALE_SOURCE_PIN, and a request presenting a superseded SHA is denied SOURCE_SHA_SUPERSEDED with the superseding SHA named). Identity is never falsified and never silently stale.",
   "implementation_sha": "RESOLVED_AT_LAUNCH",
   "expected_source_shas": {
     "founder_runtime": [
-      "20a184f36088be934ded5f8a93039d7aeabad86f"
+      "520ae4381def8be52486935e1b9c53da31e52202"
     ]
   },
   "source_lineage": {
@@ -15,27 +15,34 @@
         "status": "superseded",
         "qualified_at": "2026-07-22T00:00:00Z",
         "superseded_at": "2026-08-16T21:09:58Z",
-        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
+        "superseded_by": "520ae4381def8be52486935e1b9c53da31e52202"
       },
       {
         "sha": "e64c545adccf47394b1e45e860751816753617b4",
         "status": "superseded",
         "qualified_at": "2026-08-16T21:09:58Z",
         "superseded_at": "2026-08-20T15:00:00Z",
-        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
+        "superseded_by": "520ae4381def8be52486935e1b9c53da31e52202"
       },
       {
         "sha": "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2",
         "status": "superseded",
         "qualified_at": "2026-08-20T15:00:00Z",
         "superseded_at": "2026-08-20T15:50:00Z",
-        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
+        "superseded_by": "520ae4381def8be52486935e1b9c53da31e52202"
       },
       {
         "sha": "20a184f36088be934ded5f8a93039d7aeabad86f",
-        "status": "qualified",
+        "status": "superseded",
         "qualified_at": "2026-08-20T15:50:00Z",
-        "qualification_note": "T31B: the Founder Runtime that submits a SIGNED external founder approval to /v2/authorize and holds no signing key of its own. Its predecessor 949a8b8 is superseded by this very change \u2014 qualifying a runtime is what advancing it costs."
+        "superseded_at": "2026-08-20T17:35:00Z",
+        "superseded_by": "520ae4381def8be52486935e1b9c53da31e52202"
+      },
+      {
+        "sha": "520ae4381def8be52486935e1b9c53da31e52202",
+        "status": "qualified",
+        "qualified_at": "2026-08-20T17:35:00Z",
+        "qualification_note": "T39: the Founder Runtime that exposes the mission AUTHORITY gate over HTTP. Until this SHA the external channel could only be driven in-process, so a founder's ALLOW arriving through the API produced a plan decision the mission kernel refuses. Its predecessor 20a184f36088be934ded5f8a93039d7aeabad86f is superseded by this very change — qualifying a runtime is what advancing it costs."
       }
     ]
   },
@@ -87,5 +94,5 @@
     "mode": "live",
     "mutation_ratified": false
   },
-  "_lineage_note": "superseded_by names the CURRENTLY QUALIFIED identity, not the immediate successor: validateTrustConfig requires every superseded entry to point at a qualified lineage SHA. superseded_at preserves the real retirement order. This lineage is kept identical to config/governance-v2-adoption-trust.json on purpose \u2014 the Founder Runtime's identity is one fact, and a SHA that is current on one surface must not read as stale on the other."
+  "_lineage_note": "superseded_by names the CURRENTLY QUALIFIED identity, not the immediate successor: validateTrustConfig requires every superseded entry to point at a qualified lineage SHA. superseded_at preserves the real retirement order. This lineage is kept identical to config/governance-v2-adoption-trust.json on purpose — the Founder Runtime's identity is one fact, and a SHA that is current on one surface must not read as stale on the other."
 }

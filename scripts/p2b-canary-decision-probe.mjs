@@ -30,7 +30,7 @@ export function canonicalCanaryRequest({ missionId: mission, nonce, issuedAt } =
       component: "founder_runtime",
       // Current qualified Founder Runtime lineage (see source_lineage in
       // config/p2b-canary-trust.json; superseded SHAs are denied precisely).
-      source_sha: "20a184f36088be934ded5f8a93039d7aeabad86f"
+      source_sha: "520ae4381def8be52486935e1b9c53da31e52202"
     },
     authority_class: "A0",
     operation: "organism_status",

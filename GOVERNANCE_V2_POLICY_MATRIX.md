@@ -113,7 +113,8 @@ must not read as stale on the other):
 
 | SHA | Status | Qualified | Superseded |
 |---|---|---|---|
-| `20a184f36088be934ded5f8a93039d7aeabad86f` | **qualified** | 2026-08-20 (T31B) | — |
+| `520ae4381def8be52486935e1b9c53da31e52202` | **qualified** | 2026-08-20 (T39) | — |
+| `20a184f36088be934ded5f8a93039d7aeabad86f` | superseded | 2026-08-20 (T31B) | 2026-08-20 |
 | `949a8b8c99f2b111edf8c734f2cfcad89c47bdf2` | superseded | 2026-08-20 (T31A) | 2026-08-20 |
 | `e64c545adccf47394b1e45e860751816753617b4` | superseded | 2026-08-16 | 2026-08-20 |
 | `a08f4abb908db02db1829730790140946504450c` | superseded | 2026-07-22 | 2026-08-16 |
@@ -123,6 +124,12 @@ the lane's own recipe-engine merge advanced the Founder Runtime again. That is
 not churn to be tidied away: qualifying a runtime is what advancing it costs,
 and a pin that stayed at `949a8b8` would be exactly the stale identity this
 contract exists to refuse.
+
+T39 did it again, for the same reason: routing the mission authority gate over
+HTTP advanced the Founder Runtime a fourth time. Four entries in five days is
+what an honest identity contract looks like while the thing it identifies is
+still being finished — the alternative is not a shorter table, it is a pin that
+quietly names a runtime nobody is running.
 
 `superseded_by` on every superseded entry names the CURRENTLY QUALIFIED head,
 not the immediate successor: validation requires it to be a qualified lineage
