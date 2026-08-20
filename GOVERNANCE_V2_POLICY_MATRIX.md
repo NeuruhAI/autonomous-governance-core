@@ -106,9 +106,72 @@ facts is not a replay. Terminal outcomes (allow/deny) consume the nonce.
   with the superseding SHA named — precise, fail-closed, never falsified.
 - An unknown SHA remains `SOURCE_SHA_MISMATCH`.
 
-Current Founder Runtime lineage (config/p2b-canary-trust.json):
-`e64c545adccf47394b1e45e860751816753617b4` qualified 2026-08-16; prior pin
-`a08f4abb908db02db1829730790140946504450c` superseded.
+Current Founder Runtime lineage (identical in
+`config/p2b-canary-trust.json` and `config/governance-v2-adoption-trust.json`
+— the runtime's identity is ONE fact, and a SHA that is current on one surface
+must not read as stale on the other):
+
+| SHA | Status | Qualified | Superseded |
+|---|---|---|---|
+| `949a8b8c99f2b111edf8c734f2cfcad89c47bdf2` | **qualified** | 2026-08-20 (T31B) | — |
+| `e64c545adccf47394b1e45e860751816753617b4` | superseded | 2026-08-16 | 2026-08-20 |
+| `a08f4abb908db02db1829730790140946504450c` | superseded | 2026-07-22 | 2026-08-16 |
+
+`superseded_by` on every superseded entry names the CURRENTLY QUALIFIED head,
+not the immediate successor: validation requires it to be a qualified lineage
+SHA, so the whole history forwards to one identity. `superseded_at` records the
+real order in which each SHA was retired.
+
+## T31B — the authority chain on /v2/authorize
+
+Three gates run before any tier can allow. Each existed on `/v2/decide` or in
+the trust config already; none of them ran here, and each absence was a way to
+be authorized without being checked.
+
+**Identity (`IDENTITY_UNKNOWN` / `SOURCE_SHA_MISMATCH` / `SOURCE_SHA_SUPERSEDED`).**
+`facts.source_sha` is REQUIRED. The component must be registered and the SHA it
+attests must be the pinned, currently-qualified one. Without this the surface
+could not tell a current runtime from a superseded one, so the denial the whole
+lineage contract exists to produce was unreachable here.
+
+**Unratified-mutation seal (`MUTATION_NOT_RATIFIED`).** While
+`runtime.mode = "live"` and `runtime.mutation_ratified` is false, any action
+class whose baseline tier is above R0 is refused outright. No grant and no
+approval is consulted first: the seal is not a permission question.
+
+**Presented credentials are never ignored.** A founder approval is verified
+against these exact facts, and a grant's signature/issuer/shape is verified,
+BEFORE any tier can short-circuit to an allow — R0 included. Previously a
+forged credential riding inside an otherwise-allowable request was discarded
+unexamined and the receipt said "allow" without recording that forged evidence
+had been offered. Grant EXPIRY remains non-hostile: it still degrades to the
+founder prompt.
+
+### Component narrowing (optional, purely restrictive)
+
+`components[id].max_risk_tier` caps the consequence tier a component can ever
+reach, whatever it presents (`RISK_TIER_EXCEEDED`).
+`components[id].allowed_action_classes` admits only the named classes for that
+component (`ACTION_CLASS_NOT_ADMITTED`). Both are absent-by-default and there is
+deliberately no field that widens a component beyond the surface's own tier
+rules. The live adoption config caps `founder_runtime` at `R0` and admits only
+the six observation classes.
+
+### `mode: "scope_once"` — an asynchronous human decision, still one-shot
+
+`once` binds `facts_hash`, which covers the freshness nonce and `issued_at` the
+requester only mints at request time — so no external process can sign it in
+advance, and a human decision is by nature asynchronous. `session_scope` is
+signable in advance but leaves a standing permission for its TTL, which is not
+one-shot.
+
+`scope_once` binds `scope_key`, `source_sha`, `risk_tier`, `nonce`, `issued_at`
+and `expires_at`: the stable action coordinates, the attested runtime version,
+and the classified tier. It is consumed exactly once through the nonce ledger
+and never opens a session scope, so the next request must carry its own
+externally decided approval. Version binding is what makes a founder decision
+non-transferable across a source advance rather than merely time-limited
+(`APPROVAL_SOURCE_MISMATCH`).
 
 ## Wire surface
 

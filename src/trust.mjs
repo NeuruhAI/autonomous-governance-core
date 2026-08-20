@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { hashCanonical, isSha256Hex } from "./canonical.mjs";
+import { ACTION_CLASS_TIERS, RISK_TIERS } from "./risk.mjs";
 
 // Trusted decision configuration. Everything here is authority-side state:
 // approver identities and secrets, component identity pins, the tool/operation
@@ -175,6 +176,28 @@ export function validateTrustConfig(config) {
 
     if (!(componentId in config.expected_source_shas)) {
       throw new TrustConfigError("component " + componentId + " has no pinned source SHA.");
+    }
+
+    // Optional consequence ceiling for the authorize surface. Purely narrowing:
+    // absent means the surface's own tier rules decide alone, present means the
+    // component can never be authorized above the named tier no matter what
+    // grant or approval it presents. There is deliberately no field that widens
+    // a component beyond those rules.
+    if (component.max_risk_tier !== undefined && !RISK_TIERS.includes(component.max_risk_tier)) {
+      throw new TrustConfigError("component " + componentId + " max_risk_tier is unknown.");
+    }
+
+    // Optional action-class allowlist, also purely narrowing.
+    if (component.allowed_action_classes !== undefined) {
+      if (!Array.isArray(component.allowed_action_classes) || component.allowed_action_classes.length === 0) {
+        throw new TrustConfigError("component " + componentId + " allowed_action_classes must be a non-empty list when provided.");
+      }
+
+      for (const actionClass of component.allowed_action_classes) {
+        if (typeof actionClass !== "string" || !(actionClass in ACTION_CLASS_TIERS)) {
+          throw new TrustConfigError("component " + componentId + " allowed_action_classes names unknown action class: " + String(actionClass));
+        }
+      }
     }
   }
 

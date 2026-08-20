@@ -58,8 +58,12 @@ enforced at every layer:
   mark the old entry superseded (`superseded_by`), and move
   `expected_source_shas` — validation forces the pin and lineage to agree.
 
-Operator note: Founder Runtime clients must present `e64c545…` after deploy;
-a stale client fails closed with the precise reason (never falsified).
+Operator note (superseded by T31B, 2026-08-20): the qualified Founder Runtime
+identity is now `949a8b8c99f2b111edf8c734f2cfcad89c47bdf2`. `e64c545…` is itself
+recorded as superseded and a client still presenting it fails closed with the
+precise reason. Everything above is the acceptance evidence for the Governance
+V2 adoption deploy as it stood on 2026-08-16 and is left intact; the current
+matrix is in `GOVERNANCE_V2_POLICY_MATRIX.md`.
 
 ## 4. Exact-label deployment procedure (NOT yet executed)
 

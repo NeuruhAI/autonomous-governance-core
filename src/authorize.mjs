@@ -2,7 +2,7 @@ import { canonicalize, hashCanonical, hmacHex, timingSafeEqualHex, isSha256Hex }
 import { makeId } from "./id.mjs";
 import { appendToChain, openChain } from "./receipts.mjs";
 import { consumeNonce, openConsumptionLedger } from "./consumption.mjs";
-import { trustConfigFingerprint } from "./trust.mjs";
+import { lineageEntry, trustConfigFingerprint } from "./trust.mjs";
 import {
   ACTION_CLASS_TIERS,
   RISK_TIERS,
@@ -29,9 +29,29 @@ import { classifyPathSensitivity, pathLexicalErrors, resolveRealTargetPath } fro
 // Secret-denied roots and path escapes deny outright — no grant, session
 // scope or approval evaluated here can admit them. Every outcome is receipted
 // on a hash-chained ledger and every facts nonce is one-time-use.
+//
+// Three gates run BEFORE any tier can allow, because each of them was
+// previously absent here and each absence was a way to be allowed without
+// being checked:
+//
+//   IDENTITY   the component must be registered and the source SHA it attests
+//              must be the pinned, currently-qualified one. Without this the
+//              surface could not tell a current runtime from a superseded one,
+//              so SOURCE_SHA_SUPERSEDED — enforced on /v2/decide since P2-B —
+//              was unreachable here and a stale runtime authorized silently.
+//   SEAL       while runtime.mutation_ratified is false, a live mutating action
+//              is refused outright. /v2/decide has always sealed this; this
+//              surface did not, so a FounderGrant could authorize live mutation
+//              the trust config declares unratified.
+//   PRESENTED  a founder approval that is presented is ALWAYS verified against
+//              these exact facts. It used to be looked at only on the path that
+//              needed it, so a forged approval riding inside an otherwise
+//              allowable request was ignored and the receipt said "allow"
+//              without ever recording that forged credentials were offered.
 
 export const AUTHORIZATION_SCHEMA_VERSION = "gov.authorization.v1";
 export const FOUNDER_APPROVAL_SCHEMA_VERSION = "gov.founder.approval.v1";
+export const FOUNDER_APPROVAL_MODES = ["once", "session_scope", "scope_once"];
 export const AUTHORIZE_DECISIONS = ["allow", "deny", "founder_required"];
 
 // Authority reference for the risk ruleset itself: changes when the
@@ -117,8 +137,8 @@ export function verifyFounderApproval(approval, expected, config, nowMs) {
     return { ok: false, reason_code: "APPROVAL_MALFORMED", detail: "approval_id is required." };
   }
 
-  if (approval.mode !== "once" && approval.mode !== "session_scope") {
-    return { ok: false, reason_code: "APPROVAL_MALFORMED", detail: "mode must be once or session_scope." };
+  if (!FOUNDER_APPROVAL_MODES.includes(approval.mode)) {
+    return { ok: false, reason_code: "APPROVAL_MALFORMED", detail: "mode must be one of " + FOUNDER_APPROVAL_MODES.join(", ") + "." };
   }
 
   const bound = approval.bound;
@@ -127,7 +147,20 @@ export function verifyFounderApproval(approval, expected, config, nowMs) {
     return { ok: false, reason_code: "APPROVAL_MALFORMED", detail: "Approval bound block missing." };
   }
 
-  const expectedKeys = [approval.mode === "once" ? "facts_hash" : "scope_key", "risk_tier", "nonce", "issued_at", "expires_at"].sort();
+  // scope_once exists because a human decision is ASYNCHRONOUS. `once` binds
+  // facts_hash, which covers the freshness nonce and issued_at the requester
+  // only mints at request time — so no external process can sign it in advance.
+  // `session_scope` is signable in advance but leaves a standing permission for
+  // its TTL, which is not one-shot. scope_once binds the stable action
+  // coordinates AND the attested runtime source SHA, is consumed exactly once
+  // through the nonce ledger, and never opens a session scope.
+  const BOUND_KEYS = {
+    once: ["facts_hash", "risk_tier", "nonce", "issued_at", "expires_at"],
+    session_scope: ["scope_key", "risk_tier", "nonce", "issued_at", "expires_at"],
+    scope_once: ["scope_key", "source_sha", "risk_tier", "nonce", "issued_at", "expires_at"]
+  };
+
+  const expectedKeys = BOUND_KEYS[approval.mode].slice().sort();
 
   if (JSON.stringify(Object.keys(bound).sort()) !== JSON.stringify(expectedKeys)) {
     return { ok: false, reason_code: "APPROVAL_MALFORMED", detail: "Approval bound fields incomplete or extended." };
@@ -170,6 +203,21 @@ export function verifyFounderApproval(approval, expected, config, nowMs) {
   if (approval.mode === "once") {
     if (!isSha256Hex(bound.facts_hash) || bound.facts_hash !== expected.facts_hash) {
       return { ok: false, reason_code: "APPROVAL_CONTENT_MISMATCH", detail: "Approval is not bound to these exact action facts." };
+    }
+  } else if (approval.mode === "scope_once") {
+    if (!isSha256Hex(bound.scope_key) || bound.scope_key !== expected.scope_key) {
+      return { ok: false, reason_code: "APPROVAL_CONTENT_MISMATCH", detail: "Approval is not bound to this exact scope." };
+    }
+
+    // Version binding: a decision made about one runtime version is void for
+    // any other. This is what makes the founder decision non-transferable
+    // across a source advance rather than merely time-limited.
+    if (typeof bound.source_sha !== "string" || bound.source_sha !== expected.source_sha) {
+      return {
+        ok: false,
+        reason_code: "APPROVAL_SOURCE_MISMATCH",
+        detail: "Approval was issued for source " + String(bound.source_sha) + " but the requester attests " + expected.source_sha + "."
+      };
     }
   } else {
     if (riskRank(expected.risk_tier) > SESSION_SAFE_MAX_RANK) {
@@ -354,6 +402,40 @@ export function authorizeAction(runtime, facts, { grant, founder_approval } = {}
     return deny("NONCE_REPLAYED", factsHash, ["Facts nonce was already decided."]);
   }
 
+  // ---- Identity: the component must be registered and the source SHA it
+  // attests must be the pinned, currently-qualified one. Same law as
+  // /v2/decide, same reason codes, same refusal to falsify identity.
+  const component = config.components[facts.component];
+
+  if (!component) {
+    return deny("IDENTITY_UNKNOWN", factsHash, ["Requesting component is not registered in the trusted configuration."]);
+  }
+
+  const pinnedShas = config.expected_source_shas[facts.component] || [];
+
+  if (!pinnedShas.includes(facts.source_sha)) {
+    const lineage = lineageEntry(config, facts.component, facts.source_sha);
+
+    if (lineage && lineage.status === "superseded") {
+      return deny("SOURCE_SHA_SUPERSEDED", factsHash, [
+        "Attested source SHA " + facts.source_sha + " is a superseded " + facts.component +
+          " lineage (superseded by " + lineage.superseded_by +
+          "). Re-qualify or advance the requester to the qualified lineage; identity is never falsified."
+      ]);
+    }
+
+    return deny("SOURCE_SHA_MISMATCH", factsHash, ["Attested source SHA is not the pinned SHA for this component."]);
+  }
+
+  // Optional, purely-narrowing component admission: when the trusted config
+  // names the action classes a component may ask about, anything else is an
+  // untrusted operation for that component. Absent = unchanged behaviour.
+  if (Array.isArray(component.allowed_action_classes) && !component.allowed_action_classes.includes(facts.action_class)) {
+    return deny("ACTION_CLASS_NOT_ADMITTED", factsHash, [
+      "Action class " + facts.action_class + " is not admitted for component " + facts.component + "."
+    ]);
+  }
+
   // ---- Path enforcement: lexical canonical form, then resolved sensitivity.
   let pathSensitivity = "normal";
 
@@ -411,12 +493,35 @@ export function authorizeAction(runtime, facts, { grant, founder_approval } = {}
   const allow = (reasonCode, extra = {}) =>
     finalize(runtime, facts, factsHash, "allow", reasonCode, { ...base, ...extra });
 
-  // R0 — OBSERVE: auto-allow, receipted.
-  if (risk.tier === "R0") {
-    return allow("AUTO_ALLOW_OBSERVE", { reasons: risk.factors });
+  // ---- Component consequence ceiling (optional, purely narrowing). A
+  // component trusted only to observe must not be able to reach a mutating
+  // tier at all, whatever credentials it presents.
+  if (typeof component.max_risk_tier === "string" && riskRank(risk.tier) > riskRank(component.max_risk_tier)) {
+    return deny("RISK_TIER_EXCEEDED", factsHash, [
+      "Component " + facts.component + " is trusted to at most " + component.max_risk_tier +
+        "; this action classifies " + risk.tier + ".",
+      ...risk.factors
+    ], base);
   }
 
-  // ---- Grant evaluation (R1–R3 only; R4/R5 are never grant-satisfiable).
+  // ---- The unratified-mutation seal. /v2/decide has always refused live
+  // mutation while runtime.mutation_ratified is false; this surface did not,
+  // so a FounderGrant could authorize exactly what the seal exists to refuse.
+  // No grant and no approval is consulted before it: the seal is not a
+  // permission question.
+  if (config.runtime.mode === "live" && ACTION_CLASS_TIERS[facts.action_class] !== "R0" && config.runtime.mutation_ratified !== true) {
+    return deny("MUTATION_NOT_RATIFIED", factsHash, [
+      "Live mutation is not ratified in this trust configuration; action class " +
+        facts.action_class + " is mutating."
+    ], base);
+  }
+
+  // ---- Presented grants are verified here, before any tier can allow.
+  // Verification is separate from ADMISSION: a grant whose signature, issuer or
+  // shape is wrong is hostile evidence and denies outright at every tier,
+  // including R0 — the surface must never issue an allow receipt while ignoring
+  // forged credentials that were offered to it. Expiry alone is not hostile:
+  // it degrades to the founder prompt exactly as before.
   let grantContext = { grant_id: null, grant_expires_at: null };
   let grantMissReasons = [];
   let grantExpired = false;
@@ -442,6 +547,88 @@ export function authorizeAction(runtime, facts, { grant, founder_approval } = {}
     }
   }
 
+  // ---- Expected binding for any presented founder approval.
+  const expected = {
+    facts_hash: factsHash,
+    scope_key: scopeKey,
+    risk_tier: risk.tier,
+    source_sha: facts.source_sha,
+    lane: facts.lane,
+    component: facts.component
+  };
+
+  // A presented approval is verified HERE — before any tier, grant or scope can
+  // short-circuit to an allow — so that credentials offered in a request are
+  // never merely ignored. Consumption still happens only where the approval is
+  // actually used to authorize.
+  let approvalCheck = null;
+
+  if (founder_approval !== undefined && founder_approval !== null) {
+    approvalCheck = verifyFounderApproval(founder_approval, expected, config, nowMs);
+
+    if (!approvalCheck.ok) {
+      return deny(approvalCheck.reason_code, factsHash, [approvalCheck.detail], base);
+    }
+  }
+
+  // Consume a verified approval and turn it into the authorization it backs.
+  const allowOnApproval = (result, extra = {}) => {
+    const consumption = consumeNonce(runtime.ledger, {
+      nonce: result.nonce,
+      scope: "founder_approval",
+      decision_id: null,
+      request_hash: factsHash,
+      consumed_at: new Date(nowMs).toISOString()
+    });
+
+    if (!consumption.ok) {
+      return deny(consumption.reason_code, factsHash, ["Founder approval nonce could not be atomically consumed."], { ...base, ...extra });
+    }
+
+    const consumptionRef = {
+      kind: "founder_approval_consumption",
+      approver_id: result.approver_id,
+      nonce: result.nonce,
+      entry_hash: consumption.entry.entry_hash,
+      seq: consumption.entry.seq
+    };
+
+    runtime.promptedScopes.delete(scopeKey);
+
+    if (result.mode === "session_scope") {
+      runtime.sessionScopes.set(scopeKey, { expiresAtMs: result.expiresAtMs, approver_id: result.approver_id });
+
+      return allow("SESSION_SCOPE_APPROVED", {
+        ...extra,
+        reasons: [...risk.factors, "Founder approved this exact scope for the session (until " + new Date(result.expiresAtMs).toISOString() + ")."],
+        approver_ids: [result.approver_id],
+        session_scope_used: true,
+        evidence_refs: [consumptionRef]
+      });
+    }
+
+    // scope_once and once are both single-use: nothing is cached, so the next
+    // request must carry its own externally-decided approval.
+    return allow(result.mode === "scope_once" ? "FOUNDER_APPROVED_SCOPE_ONCE" : "FOUNDER_APPROVED_ONCE", {
+      ...extra,
+      reasons: risk.factors,
+      approver_ids: [result.approver_id],
+      evidence_refs: [consumptionRef]
+    });
+  };
+
+  // R0 — OBSERVE: auto-allow, receipted. A verified approval presented anyway
+  // is honoured and consumed rather than discarded, so the receipt records the
+  // founder decision that was actually offered for this action.
+  if (risk.tier === "R0") {
+    if (approvalCheck) {
+      return allowOnApproval(approvalCheck, grantContext);
+    }
+
+    return allow("AUTO_ALLOW_OBSERVE", { ...grantContext, reasons: risk.factors });
+  }
+
+  // ---- Grant admission (R1–R3 only; R4/R5 are never grant-satisfiable).
   if (verifiedGrant && riskRank(risk.tier) <= riskRank("R3")) {
     const admission = grantAdmits(verifiedGrant, facts, { fsImpl: runtime.fsImpl });
 
@@ -487,63 +674,11 @@ export function authorizeAction(runtime, facts, { grant, founder_approval } = {}
     }
   }
 
-  // ---- Founder path: presented approval, then session scope, then prompt.
-  const expected = {
-    facts_hash: factsHash,
-    scope_key: scopeKey,
-    risk_tier: risk.tier,
-    lane: facts.lane,
-    component: facts.component
-  };
-
-  if (founder_approval !== undefined && founder_approval !== null) {
-    const result = verifyFounderApproval(founder_approval, expected, config, nowMs);
-
-    if (!result.ok) {
-      return deny(result.reason_code, factsHash, [result.detail], { ...base, ...grantContext });
-    }
-
-    const consumption = consumeNonce(runtime.ledger, {
-      nonce: result.nonce,
-      scope: "founder_approval",
-      decision_id: null,
-      request_hash: factsHash,
-      consumed_at: new Date(nowMs).toISOString()
-    });
-
-    if (!consumption.ok) {
-      return deny(consumption.reason_code, factsHash, ["Founder approval nonce could not be atomically consumed."], { ...base, ...grantContext });
-    }
-
-    const consumptionRef = {
-      kind: "founder_approval_consumption",
-      approver_id: result.approver_id,
-      nonce: result.nonce,
-      entry_hash: consumption.entry.entry_hash,
-      seq: consumption.entry.seq
-    };
-
-    if (result.mode === "session_scope") {
-      runtime.sessionScopes.set(scopeKey, { expiresAtMs: result.expiresAtMs, approver_id: result.approver_id });
-      runtime.promptedScopes.delete(scopeKey);
-
-      return allow("SESSION_SCOPE_APPROVED", {
-        ...grantContext,
-        reasons: [...risk.factors, "Founder approved this exact scope for the session (until " + new Date(result.expiresAtMs).toISOString() + ")."],
-        approver_ids: [result.approver_id],
-        session_scope_used: true,
-        evidence_refs: [consumptionRef]
-      });
-    }
-
-    runtime.promptedScopes.delete(scopeKey);
-
-    return allow("FOUNDER_APPROVED_ONCE", {
-      ...grantContext,
-      reasons: risk.factors,
-      approver_ids: [result.approver_id],
-      evidence_refs: [consumptionRef]
-    });
+  // ---- Founder path: the already-verified approval, then session scope, then
+  // a prompt. Verification happened before any short-circuit; only consumption
+  // is deferred to here, where the approval is what actually authorizes.
+  if (approvalCheck) {
+    return allowOnApproval(approvalCheck, grantContext);
   }
 
   if (riskRank(risk.tier) <= SESSION_SAFE_MAX_RANK) {

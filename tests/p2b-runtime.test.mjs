@@ -15,8 +15,11 @@ import { canonicalCanaryRequest } from "../scripts/p2b-canary-decision-probe.mjs
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 // Current qualified Founder Runtime lineage; the prior pin is retained in
 // source_lineage as superseded and must fail closed with a precise reason.
-const RE_SHA = "e64c545adccf47394b1e45e860751816753617b4";
+const RE_SHA = "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2";
 const RE_SHA_SUPERSEDED = "a08f4abb908db02db1829730790140946504450c";
+// The pin T31B superseded. It was the qualified identity until the Founder
+// Runtime advanced; a request still presenting it must now be denied precisely.
+const RE_SHA_PRIOR_PIN = "e64c545adccf47394b1e45e860751816753617b4";
 const GOV_SHA = () => execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
 
 function canonicalConfig() {
@@ -78,8 +81,18 @@ test("stale runtime identity fails closed with the precise superseded reason", (
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
-  assert.match(decision.reasons[0], /superseded by e64c545adccf47394b1e45e860751816753617b4/);
+  assert.match(decision.reasons[0], /superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/);
   assert.match(decision.reasons[0], /never falsified/);
+});
+
+test("the pin T31B superseded is itself denied precisely", () => {
+  const { runtime } = freshRuntime();
+  const request = canonicalCanaryRequest({});
+  request.requester = { component: "founder_runtime", source_sha: RE_SHA_PRIOR_PIN };
+  const decision = decideRequest(runtime, request);
+  assert.equal(decision.decision, "deny");
+  assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
+  assert.match(decision.reasons[0], /superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/);
 });
 
 test("current qualified runtime identity passes", () => {
@@ -293,6 +306,7 @@ function wireObserveFacts() {
     action_id: "act_wire_probe",
     lane: "founder-runtime-lane",
     component: "founder_runtime",
+    source_sha: RE_SHA,
     action_class: "query",
     summary: "Read-only wire probe.",
     target: { type: "service", id: "qdrant" },

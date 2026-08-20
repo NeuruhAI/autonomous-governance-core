@@ -4,9 +4,9 @@ import { hashCanonical } from "../src/canonical.mjs";
 import { validateTrustConfig } from "../src/trust.mjs";
 import { createAuthorizeRuntime, signFounderApproval, scopeKeyFor, FOUNDER_APPROVAL_SCHEMA_VERSION } from "../src/authorize.mjs";
 import { signGrant, GRANT_SCHEMA_VERSION } from "../src/grants.mjs";
-import { T0, freshNonce, iso, makeTrustConfig, tempDir } from "./helpers.mjs";
+import { AXON_SHA, T0, freshNonce, iso, makeTrustConfig, tempDir } from "./helpers.mjs";
 
-export { T0, freshNonce, iso, tempDir };
+export { AXON_SHA, T0, freshNonce, iso, tempDir };
 
 export const FOUNDER_SECRET = "founder-secret-0123456789abcdef0";
 export const LANE = "lane-t3-governance";
@@ -54,6 +54,7 @@ export function makeFacts(overrides = {}) {
     action_id: "act_" + freshNonce("a").slice(-8),
     lane: LANE,
     component: "axon-gateway",
+    source_sha: AXON_SHA,
     action_class: "query",
     summary: "Read Qdrant collection status.",
     target: { type: "service", id: "qdrant" },
@@ -102,6 +103,7 @@ export function makeFounderApproval(facts, runtime, options = {}) {
     nonce = freshNonce("fapproval"),
     issuedMs = T0 - 1000,
     ttlSeconds = 600,
+    sourceSha,
     mutateBound
   } = options;
 
@@ -114,6 +116,9 @@ export function makeFounderApproval(facts, runtime, options = {}) {
 
   if (mode === "once") {
     bound.facts_hash = hashCanonical(facts);
+  } else if (mode === "scope_once") {
+    bound.scope_key = scopeKeyFor(facts);
+    bound.source_sha = sourceSha === undefined ? facts.source_sha : sourceSha;
   } else {
     bound.scope_key = scopeKeyFor(facts);
   }

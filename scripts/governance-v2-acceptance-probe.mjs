@@ -4,10 +4,20 @@
 //   PROBE_FOUNDER_SECRET=<secret> node scripts/governance-v2-acceptance-probe.mjs [base-url]
 //
 // Runs every adoption matrix row against a running instance (V1 compat,
-// /v2/decide identity semantics, /v2/authorize risk semantics) and exits 0
-// only when EVERY row matches its expected decision AND reason. This is the
-// semantic gate used by the adoption runtime (up-verified) and the deploy
-// procedure: any mismatch is a semantic failure that triggers rollback.
+// /v2/decide identity semantics, /v2/authorize identity + founder-authority
+// semantics) and exits 0 only when EVERY row matches its expected decision AND
+// reason. This is the semantic gate used by the adoption runtime (up-verified)
+// and the deploy procedure: any mismatch is a semantic failure that triggers
+// rollback.
+//
+// The /v2/authorize rows probe THIS configuration, not a hypothetical one. The
+// live adoption trust config registers exactly one component (founder_runtime,
+// capped at R0 and admitted only for read-only action classes), so the rows
+// that used to walk R1-R5 under probe-issued grants could only run by pretending
+// the live config grants capabilities it does not. Those tier semantics are
+// covered against the fixture config in tests/authorize.test.mjs and
+// tests/grants.test.mjs, where the capabilities they need actually exist. What
+// is proved here is what this instance will actually do to the real caller.
 //
 // The probe only requests decisions; Governance never executes. Probing the
 // live port 8848 requires PROBE_ALLOW_LIVE=1 (set by the deploy procedure).
@@ -15,12 +25,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { signGrant } from "../src/grants.mjs";
+import { FOUNDER_APPROVAL_SCHEMA_VERSION, scopeKeyFor, signFounderApproval } from "../src/authorize.mjs";
 import { canonicalCanaryRequest } from "./p2b-canary-decision-probe.mjs";
 
 const base = process.argv[2] || "http://127.0.0.1:18730";
 const FOUNDER_SECRET = process.env.PROBE_FOUNDER_SECRET || "";
 const LANE = "adoption-probe-lane";
+// The configured secret with one character changed: a near-miss key, derived
+// so no secret-shaped literal is ever written into this tree.
+const WRONG_SECRET = FOUNDER_SECRET.slice(0, -1) + (FOUNDER_SECRET.endsWith("0") ? "1" : "0");
 const REPO = "NeuruhAI/autonomous-governance-core";
 
 if (new URL(base).port === "8848" && process.env.PROBE_ALLOW_LIVE !== "1") {
@@ -29,8 +42,20 @@ if (new URL(base).port === "8848" && process.env.PROBE_ALLOW_LIVE !== "1") {
 }
 
 if (FOUNDER_SECRET.length < 16) {
-  console.error("refuse: PROBE_FOUNDER_SECRET is required (>=16 chars) to sign probe grants");
+  console.error("refuse: PROBE_FOUNDER_SECRET is required (>=16 chars) to sign probe founder approvals");
   process.exit(1);
+}
+
+function trustPin() {
+  const config = JSON.parse(fs.readFileSync(new URL("../config/governance-v2-adoption-trust.json", import.meta.url), "utf8"));
+  const pinned = config.expected_source_shas.founder_runtime;
+
+  if (!Array.isArray(pinned) || pinned.length !== 1) {
+    console.error("refuse: adoption config must pin exactly one qualified founder_runtime SHA");
+    process.exit(1);
+  }
+
+  return pinned[0];
 }
 
 const nowIso = () => new Date().toISOString();
@@ -55,32 +80,6 @@ function makeFacts(overrides = {}) {
     issued_at: nowIso(),
     ...overrides
   };
-}
-
-function makeGrant(overrides = {}) {
-  return signGrant(
-    {
-      schema_version: "gov.grant.v1",
-      grant_id: "grant_probe_" + crypto.randomBytes(4).toString("hex"),
-      issuer: "founder",
-      issued_at: isoIn(-3600 * 1000),
-      expires_at: isoIn(24 * 3600 * 1000),
-      subject: { lane: LANE },
-      allowed_repos: [REPO],
-      allowed_paths: [],
-      allowed_action_classes: ["artifact_write", "repo_edit", "test_run", "build", "git_commit", "git_push"],
-      denied_action_classes: [],
-      allowed_services: [],
-      production_permission: false,
-      external_contact_permission: false,
-      spend_ceiling_usd: 0,
-      destructive_permission: false,
-      rollback_required: false,
-      receipt_required: true,
-      ...overrides
-    },
-    FOUNDER_SECRET
-  );
 }
 
 async function post(pathname, body) {
@@ -113,10 +112,8 @@ async function check(name, fn) {
   }
 }
 
-// Probe-local proof root with a hostile symlink beside honest files.
+// Probe-local root used only to spell a traversal target that must be refused.
 const proofRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gov-adoption-probe-")));
-const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gov-adoption-outside-")));
-fs.symlinkSync(outside, path.join(proofRoot, "sneaky"));
 
 const expectAuthorize = (decision, reason) => (result) => {
   if (result.status !== 200) return "http " + result.status;
@@ -174,154 +171,215 @@ await check("v2_decide_stale_identity_precise_denial", async () => {
   if (result.body.decision !== "deny" || result.body.reason_code !== "SOURCE_SHA_SUPERSEDED") {
     return result.body.decision + "/" + result.body.reason_code;
   }
-  if (!/superseded by e64c545adccf47394b1e45e860751816753617b4/.test(result.body.reasons[0])) {
+  if (!/superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/.test(result.body.reasons[0])) {
     return "reason lacks superseding SHA";
   }
   return null;
 });
 
-// ---- /v2/authorize matrix ----
-await check("r0_read_allow", async () =>
-  expectAuthorize("allow", "AUTO_ALLOW_OBSERVE")(await post("/v2/authorize", { facts: makeFacts() })));
+// ---- /v2/authorize: identity, ceiling and founder authority ----
+//
+// The one registered component on this configuration, and the source SHA it
+// must honestly attest. Anything else is denied before consequence is even
+// classified.
+const RUNTIME_COMPONENT = "founder_runtime";
+const CURRENT_SHA = trustPin();
+const SUPERSEDED_SHA = "e64c545adccf47394b1e45e860751816753617b4";
+const PRIOR_SUPERSEDED_SHA = "a08f4abb908db02db1829730790140946504450c";
+const UNKNOWN_SHA = "0123456789abcdef0123456789abcdef01234567";
 
-const pathGrant = makeGrant({ allowed_paths: [proofRoot] });
+function runtimeFacts(overrides = {}) {
+  return makeFacts({
+    lane: "founder-runtime-lane",
+    component: RUNTIME_COMPONENT,
+    source_sha: CURRENT_SHA,
+    action_class: "status",
+    summary: "Read-only organism status observation.",
+    target: { type: "observation", id: "organism_status" },
+    repository: "NeuruhAI/recipe-engine",
+    ...overrides
+  });
+}
 
-await check("r1_scoped_write_allow_under_grant", async () =>
-  expectAuthorize("allow", "GRANT_BOUNDED_LOCAL")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "artifact_write", summary: "Write proof artifact.", target: { type: "path", id: path.join(proofRoot, "RESULT.md") } }),
-      grant: pathGrant
-    })
+// The exact artifact the EXTERNAL approval channel produces. The probe holds
+// the founder secret only because it stands in for that channel here; nothing
+// on the requesting side of this boundary ever signs.
+function signScopeOnce(facts, overrides = {}, { secret = FOUNDER_SECRET, approver = "founder" } = {}) {
+  const issued = overrides.issuedMs === undefined ? Date.now() - 1000 : overrides.issuedMs;
+  const ttl = overrides.ttlSeconds === undefined ? 600 : overrides.ttlSeconds;
+  const bound = {
+    scope_key: overrides.scopeKey === undefined ? scopeKeyFor(facts) : overrides.scopeKey,
+    source_sha: overrides.sourceSha === undefined ? facts.source_sha : overrides.sourceSha,
+    risk_tier: overrides.riskTier === undefined ? "R0" : overrides.riskTier,
+    nonce: overrides.nonce === undefined ? nonce("fapprv") : overrides.nonce,
+    issued_at: new Date(issued).toISOString(),
+    expires_at: new Date(issued + ttl * 1000).toISOString()
+  };
+
+  return signFounderApproval(
+    {
+      schema_version: FOUNDER_APPROVAL_SCHEMA_VERSION,
+      approval_id: "faid_" + crypto.randomBytes(6).toString("hex"),
+      approver_id: approver,
+      mode: "scope_once",
+      bound
+    },
+    secret
+  );
+}
+
+await check("authorize_unregistered_component_deny", async () =>
+  expectAuthorize("deny", "IDENTITY_UNKNOWN")(
+    await post("/v2/authorize", { facts: makeFacts({ component: "adoption-probe", source_sha: CURRENT_SHA }) })
   ));
 
-await check("repeat_write_no_reprompt", async () => {
-  const result = await post("/v2/authorize", {
-    facts: makeFacts({ action_class: "artifact_write", summary: "Write second proof artifact.", target: { type: "path", id: path.join(proofRoot, "SCREENSHOT_INDEX.md") } }),
-    grant: pathGrant
-  });
-  const problem = expectAuthorize("allow", "GRANT_BOUNDED_LOCAL")(result);
+await check("authorize_unknown_sha_deny", async () =>
+  expectAuthorize("deny", "SOURCE_SHA_MISMATCH")(
+    await post("/v2/authorize", { facts: runtimeFacts({ source_sha: UNKNOWN_SHA }) })
+  ));
+
+await check("authorize_superseded_sha_precise_denial", async () => {
+  const result = await post("/v2/authorize", { facts: runtimeFacts({ source_sha: SUPERSEDED_SHA }) });
+  const problem = expectAuthorize("deny", "SOURCE_SHA_SUPERSEDED")(result);
   if (problem) return problem;
-  if (result.body.founder_prompt !== null) return "unexpected founder prompt on repeat scoped write";
+  if (!new RegExp("superseded by " + CURRENT_SHA).test(result.body.reasons[0])) return "reason lacks superseding SHA";
   return null;
 });
 
-await check("r2_feature_branch_allow", async () =>
-  expectAuthorize("allow", "GRANT_BOUNDED_DEVELOPMENT")(
+await check("authorize_prior_superseded_sha_denied", async () =>
+  expectAuthorize("deny", "SOURCE_SHA_SUPERSEDED")(
+    await post("/v2/authorize", { facts: runtimeFacts({ source_sha: PRIOR_SUPERSEDED_SHA }) })
+  ));
+
+await check("authorize_current_identity_r0_allow", async () => {
+  const result = await post("/v2/authorize", { facts: runtimeFacts() });
+  const problem = expectAuthorize("allow", "AUTO_ALLOW_OBSERVE")(result);
+  if (problem) return problem;
+  if (result.body.risk_tier !== "R0") return "risk tier " + result.body.risk_tier;
+  if (result.body.execution !== "NOT_CLAIMED_BY_GOVERNANCE") return "execution claim wrong";
+  return null;
+});
+
+await check("authorize_facts_replay_denied", async () => {
+  const facts = runtimeFacts();
+  await post("/v2/authorize", { facts });
+  return expectAuthorize("deny", "NONCE_REPLAYED")(await post("/v2/authorize", { facts }));
+});
+
+// The component is trusted to observe. A mutating action class is not admitted
+// for it at all, so no credential it could present reaches consequence.
+await check("authorize_mutating_action_class_not_admitted", async () =>
+  expectAuthorize("deny", "ACTION_CLASS_NOT_ADMITTED")(
     await post("/v2/authorize", {
-      facts: makeFacts({
-        action_class: "repo_edit",
-        summary: "Edit owned repo on feature branch.",
-        target: { type: "repo", id: REPO },
-        repository: REPO,
-        branch: "release/governance-v2-adoption-20260816"
-      }),
-      grant: makeGrant()
+      facts: runtimeFacts({ action_class: "git_push", summary: "Push a branch.", target: { type: "branch", id: "feature/x" }, branch: "feature/x" })
     })
   ));
 
-await check("r3_exact_qualified_adoption_allow", async () =>
-  expectAuthorize("allow", "GRANT_QUALIFIED_ADOPTION")(
-    await post("/v2/authorize", {
-      facts: makeFacts({
-        action_class: "service_restart",
-        summary: "Exact-label restart of axon-worker.",
-        target: { type: "service", id: "axon-worker" },
-        service_label: "axon-worker",
-        production_effect: "service_restart",
-        reversibility: "rollback_known",
-        rollback_plan: "restart previous label axon-worker@lkg"
-      }),
-      grant: makeGrant({
-        allowed_action_classes: ["service_restart"],
-        allowed_services: ["axon-worker"],
-        production_permission: true,
-        qualified_operations: [
-          {
-            action_class: "service_restart",
-            target: { type: "service", id: "axon-worker" },
-            rollback: "restart previous label axon-worker@lkg",
-            preflight: "health endpoint 200 before restart",
-            postflight: "health endpoint 200 within 60s after restart"
-          }
-        ]
-      })
-    })
-  ));
-
-await check("expired_grant_founder_required", async () =>
-  expectAuthorize("founder_required", "GRANT_EXPIRED")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "artifact_write", summary: "Write under expired grant.", target: { type: "path", id: path.join(proofRoot, "LATE.md") } }),
-      grant: makeGrant({ allowed_paths: [proofRoot], issued_at: isoIn(-7200 * 1000), expires_at: isoIn(-3600 * 1000) })
-    })
-  ));
-
-await check("wrong_repo_deny", async () =>
-  expectAuthorize("deny", "GRANT_REPO_MISMATCH")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "repo_edit", summary: "Edit unauthorized repo.", target: { type: "repo", id: "NeuruhAI/recipe-engine" }, repository: "NeuruhAI/recipe-engine", branch: "feature/x" }),
-      grant: makeGrant()
-    })
-  ));
-
-await check("path_escape_deny", async () =>
-  expectAuthorize("deny", "PATH_ESCAPE")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "artifact_write", summary: "Traversal write.", target: { type: "path", id: proofRoot + "/../escape.md" } }),
-      grant: pathGrant
-    })
-  ));
-
-await check("symlink_escape_deny", async () =>
-  expectAuthorize("deny", "PATH_ESCAPE")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "artifact_write", summary: "Symlink write.", target: { type: "path", id: path.join(proofRoot, "sneaky", "escape.md") } }),
-      grant: pathGrant
-    })
-  ));
-
-await check("secret_path_deny", async () =>
+await check("authorize_secret_path_deny", async () =>
   expectAuthorize("deny", "SECRET_ROOT_DENIED")(
     await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "read", summary: "Read a private key.", target: { type: "path", id: "/Users/nobody/.ssh/id_ed25519" } })
+      facts: runtimeFacts({ action_class: "read", summary: "Read a private key.", target: { type: "path", id: "/Users/nobody/.ssh/id_ed25519" } })
     })
   ));
 
-await check("external_contact_founder_required", async () =>
-  expectAuthorize("founder_required", "FOUNDER_REQUIRED_EXTERNAL")(
+await check("authorize_path_escape_deny", async () =>
+  expectAuthorize("deny", "PATH_ESCAPE")(
     await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "external_message", summary: "Send seller SMS.", target: { type: "channel", id: "sms:+15551230000" }, externality: "sms" })
+      facts: runtimeFacts({ action_class: "read", summary: "Traversal read.", target: { type: "path", id: proofRoot + "/../escape.md" } })
     })
   ));
 
-await check("spend_founder_required", async () =>
-  expectAuthorize("founder_required", "FOUNDER_REQUIRED_EXTERNAL")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "spend", summary: "Provider spend.", spend_usd: 100, target: { type: "service", id: "provider-billing" } })
-    })
-  ));
+// ---- the external founder decision, over the wire ----
+await check("authorize_signed_scope_once_allow", async () => {
+  const facts = runtimeFacts();
+  const result = await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts) });
+  const problem = expectAuthorize("allow", "FOUNDER_APPROVED_SCOPE_ONCE")(result);
+  if (problem) return problem;
+  if (!result.body.approver_ids.includes("founder")) return "approver not recorded";
+  if (result.body.session_scope_used !== false) return "scope_once must never open a session scope";
+  if (!result.body.evidence_refs.some((ref) => ref.kind === "founder_approval_consumption")) {
+    return "approval consumption not receipted";
+  }
+  return null;
+});
 
-await check("destructive_founder_required", async () =>
-  expectAuthorize("founder_required", "FOUNDER_REQUIRED_DESTRUCTIVE")(
-    await post("/v2/authorize", {
-      facts: makeFacts({
-        action_class: "db_drop",
-        summary: "Drop production database.",
-        target: { type: "database", id: "prod-primary" },
-        reversibility: "irreversible",
-        blast_radius: "broad",
-        production_effect: "customer_data"
-      })
-    })
-  ));
+await check("authorize_scope_once_replay_denied", async () => {
+  const first = runtimeFacts();
+  const approval = signScopeOnce(first);
+  await post("/v2/authorize", { facts: first, founder_approval: approval });
+  // Fresh facts, same signed approval: the approval nonce is spent.
+  return expectAuthorize("deny", "NONCE_REPLAYED")(
+    await post("/v2/authorize", { facts: runtimeFacts(), founder_approval: approval })
+  );
+});
 
-await check("force_push_founder_required", async () =>
-  expectAuthorize("founder_required", "FOUNDER_REQUIRED_DESTRUCTIVE")(
-    await post("/v2/authorize", {
-      facts: makeFacts({ action_class: "git_push", summary: "Force push.", force: true, target: { type: "branch", id: "feature/x" }, repository: REPO, branch: "feature/x" }),
-      grant: makeGrant()
-    })
-  ));
+await check("authorize_unsigned_approval_deny", async () => {
+  const facts = runtimeFacts();
+  const approval = signScopeOnce(facts);
+  delete approval.signature;
+  return expectAuthorize("deny", "APPROVAL_SIGNATURE_INVALID")(
+    await post("/v2/authorize", { facts, founder_approval: approval })
+  );
+});
+
+await check("authorize_bad_signature_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVAL_SIGNATURE_INVALID")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, {}, { secret: WRONG_SECRET }) })
+  );
+});
+
+await check("authorize_self_approval_deny", async () => {
+  // A lane named "founder" would otherwise be approved by the approver whose id
+  // it shares. The boundary refuses a lane founder-approving its own action.
+  const facts = runtimeFacts({ lane: "founder" });
+  return expectAuthorize("deny", "SELF_APPROVAL")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts) })
+  );
+});
+
+await check("authorize_unknown_approver_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVER_UNKNOWN")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, {}, { approver: "mission" }) })
+  );
+});
+
+await check("authorize_scope_mismatch_deny", async () => {
+  const facts = runtimeFacts();
+  const other = runtimeFacts({ target: { type: "observation", id: "some_other_observation" } });
+  return expectAuthorize("deny", "APPROVAL_CONTENT_MISMATCH")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, { scopeKey: scopeKeyFor(other) }) })
+  );
+});
+
+await check("authorize_version_mismatch_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVAL_SOURCE_MISMATCH")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, { sourceSha: SUPERSEDED_SHA }) })
+  );
+});
+
+await check("authorize_risk_tier_mismatch_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVAL_RISK_MISMATCH")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, { riskTier: "R3" }) })
+  );
+});
+
+await check("authorize_expired_approval_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVAL_EXPIRED")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, { issuedMs: Date.now() - 600_000, ttlSeconds: 60 }) })
+  );
+});
+
+await check("authorize_ttl_beyond_maximum_deny", async () => {
+  const facts = runtimeFacts();
+  return expectAuthorize("deny", "APPROVAL_TTL_EXCEEDED")(
+    await post("/v2/authorize", { facts, founder_approval: signScopeOnce(facts, { ttlSeconds: 4000 }) })
+  );
+});
 
 const failed = rows.filter((row) => !row.ok);
 console.log("\nACCEPTANCE: " + (rows.length - failed.length) + "/" + rows.length + " rows pass" + (failed.length ? " — SEMANTIC FAILURE" : ""));

@@ -107,6 +107,7 @@ const FACTS_STRING_FIELDS = [
 
 const FACTS_ALL_FIELDS = [
   ...FACTS_STRING_FIELDS,
+  "source_sha",
   "target",
   "repository",
   "branch",
@@ -145,6 +146,15 @@ export function actionFactsErrors(facts) {
 
   if (typeof facts.action_class === "string" && !(facts.action_class in ACTION_CLASS_TIERS)) {
     errors.push("Unknown action_class: " + facts.action_class + " (unrecognized consequence fails closed).");
+  }
+
+  // Identity attestation. The component names WHO is asking and source_sha is
+  // the git source SHA that component honestly attests it is running. Both are
+  // required: an authorization surface that cannot say who asked cannot bind a
+  // founder decision to a runtime version, and an optional identity field is an
+  // identity gate anyone can skip by omitting it.
+  if (typeof facts.source_sha !== "string" || facts.source_sha.length < 7) {
+    errors.push("source_sha is required and must be the attested source SHA (>= 7 chars).");
   }
 
   const target = facts.target;
