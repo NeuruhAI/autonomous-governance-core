@@ -15,7 +15,7 @@ import { canonicalCanaryRequest } from "../scripts/p2b-canary-decision-probe.mjs
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 // Current qualified Founder Runtime lineage; the prior pin is retained in
 // source_lineage as superseded and must fail closed with a precise reason.
-const RE_SHA = "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2";
+const RE_SHA = "20a184f36088be934ded5f8a93039d7aeabad86f";
 const RE_SHA_SUPERSEDED = "a08f4abb908db02db1829730790140946504450c";
 // The pin T31B superseded. It was the qualified identity until the Founder
 // Runtime advanced; a request still presenting it must now be denied precisely.
@@ -81,7 +81,7 @@ test("stale runtime identity fails closed with the precise superseded reason", (
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
-  assert.match(decision.reasons[0], /superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/);
+  assert.match(decision.reasons[0], /superseded by 20a184f36088be934ded5f8a93039d7aeabad86f/);
   assert.match(decision.reasons[0], /never falsified/);
 });
 
@@ -92,7 +92,7 @@ test("the pin T31B superseded is itself denied precisely", () => {
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
-  assert.match(decision.reasons[0], /superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/);
+  assert.match(decision.reasons[0], /superseded by 20a184f36088be934ded5f8a93039d7aeabad86f/);
 });
 
 test("current qualified runtime identity passes", () => {

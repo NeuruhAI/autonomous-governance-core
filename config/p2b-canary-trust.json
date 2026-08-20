@@ -5,7 +5,7 @@
   "implementation_sha": "RESOLVED_AT_LAUNCH",
   "expected_source_shas": {
     "founder_runtime": [
-      "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2"
+      "20a184f36088be934ded5f8a93039d7aeabad86f"
     ]
   },
   "source_lineage": {
@@ -15,20 +15,27 @@
         "status": "superseded",
         "qualified_at": "2026-07-22T00:00:00Z",
         "superseded_at": "2026-08-16T21:09:58Z",
-        "superseded_by": "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2"
+        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
       },
       {
         "sha": "e64c545adccf47394b1e45e860751816753617b4",
         "status": "superseded",
         "qualified_at": "2026-08-16T21:09:58Z",
         "superseded_at": "2026-08-20T15:00:00Z",
-        "superseded_by": "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2"
+        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
       },
       {
         "sha": "949a8b8c99f2b111edf8c734f2cfcad89c47bdf2",
-        "status": "qualified",
+        "status": "superseded",
         "qualified_at": "2026-08-20T15:00:00Z",
-        "qualification_note": "T31B: qualified deliberately and exactly; no ancestor is accepted automatically."
+        "superseded_at": "2026-08-20T15:50:00Z",
+        "superseded_by": "20a184f36088be934ded5f8a93039d7aeabad86f"
+      },
+      {
+        "sha": "20a184f36088be934ded5f8a93039d7aeabad86f",
+        "status": "qualified",
+        "qualified_at": "2026-08-20T15:50:00Z",
+        "qualification_note": "T31B: the Founder Runtime that submits a SIGNED external founder approval to /v2/authorize and holds no signing key of its own. Its predecessor 949a8b8 is superseded by this very change \u2014 qualifying a runtime is what advancing it costs."
       }
     ]
   },

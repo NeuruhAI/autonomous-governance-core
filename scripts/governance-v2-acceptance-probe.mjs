@@ -171,7 +171,7 @@ await check("v2_decide_stale_identity_precise_denial", async () => {
   if (result.body.decision !== "deny" || result.body.reason_code !== "SOURCE_SHA_SUPERSEDED") {
     return result.body.decision + "/" + result.body.reason_code;
   }
-  if (!/superseded by 949a8b8c99f2b111edf8c734f2cfcad89c47bdf2/.test(result.body.reasons[0])) {
+  if (!/superseded by 20a184f36088be934ded5f8a93039d7aeabad86f/.test(result.body.reasons[0])) {
     return "reason lacks superseding SHA";
   }
   return null;

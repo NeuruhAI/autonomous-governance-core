@@ -59,7 +59,7 @@ enforced at every layer:
   `expected_source_shas` — validation forces the pin and lineage to agree.
 
 Operator note (superseded by T31B, 2026-08-20): the qualified Founder Runtime
-identity is now `949a8b8c99f2b111edf8c734f2cfcad89c47bdf2`. `e64c545…` is itself
+identity is now `20a184f36088be934ded5f8a93039d7aeabad86f`. `e64c545…` is itself
 recorded as superseded and a client still presenting it fails closed with the
 precise reason. Everything above is the acceptance evidence for the Governance
 V2 adoption deploy as it stood on 2026-08-16 and is left intact; the current
