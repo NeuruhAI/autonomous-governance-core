@@ -5,3 +5,6 @@ out/
 .DS_Store
 *.log
 .p2b-runtime/
+
+# Agent-CLI PID litter (zero-byte .[0-9]+ in cwd). nsv-run dirty-tree HALT.
+.[0-9]*
