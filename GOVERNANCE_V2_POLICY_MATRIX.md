@@ -113,7 +113,8 @@ must not read as stale on the other):
 
 | SHA | Status | Qualified | Superseded |
 |---|---|---|---|
-| `520ae4381def8be52486935e1b9c53da31e52202` | **qualified** | 2026-08-20 (T39) | — |
+| `fae23008e910b0a93eea31cd3eef36d6adb6b7a6` | **qualified** | 2026-09-02 (T03) | — |
+| `520ae4381def8be52486935e1b9c53da31e52202` | superseded | 2026-08-20 (T39) | 2026-09-02 |
 | `20a184f36088be934ded5f8a93039d7aeabad86f` | superseded | 2026-08-20 (T31B) | 2026-08-20 |
 | `949a8b8c99f2b111edf8c734f2cfcad89c47bdf2` | superseded | 2026-08-20 (T31A) | 2026-08-20 |
 | `e64c545adccf47394b1e45e860751816753617b4` | superseded | 2026-08-16 | 2026-08-20 |
@@ -198,3 +199,46 @@ default: requires `GOVERNANCE_DECISION_ENABLED=1`, a valid
 ever claims execution (`NOT_CLAIMED_BY_GOVERNANCE`). The legacy
 `/v1/evaluate` enum (`allow | escalate | block`) and `/v2/decide` contracts
 are unchanged.
+
+
+## T03 — mutation ratification, and the two components that consume it
+
+`runtime.mutation_ratified` stays a boolean the validator refuses. Live mutation
+is unsealed instead by `runtime.mutation_ratification`, a `gov.ratification.v1`
+artifact HMAC-signed by an enhanced approver (`src/ratification.mjs`), minted
+with `scripts/mint-ratification.mjs` and never committed — the signature is over
+the real founder secret, so a repository copy would be either useless or
+reusable, and neither is acceptable.
+
+| Property | Rule |
+|---|---|
+| scoped | `ratified_action_classes` names exactly what it ratifies |
+| ceilinged | `max_ratified_tier` may never exceed **R3**, so R4/R5 are unratifiable |
+| consistent | no named class may have a baseline above the artifact's own ceiling |
+| signed | verified against a trusted enhanced approver at config validation |
+| expiring | absolute window, TTL-bounded (`ratification_max_ttl_seconds`) |
+| absent-safe | with no ratification the surface behaves exactly as before |
+
+The load-bearing rule is in `ratificationAdmits`: admission tests the
+**classified** tier, after `classifyRisk`'s escalators, not the action class
+baseline. Ratifying `git_commit` therefore never ratifies a forced push, a
+secret-touching write, a broad blast radius, an irreversible action, or anything
+carrying externality or spend — each escalates past the ceiling and the seal
+closes again on a class that was ratified. Ratifying a class is not ratifying
+every consequence that class can carry.
+
+Components registered by T03 (adoption config only; the canary stays A0
+read-only with no approvers and one operation):
+
+| Component | Pin | Ceiling | May present |
+|---|---|---|---|
+| `founder_runtime` | `fae2300` | R2 | the six observation classes plus `artifact_write`, `report_write`, `test_run`, `git_commit` |
+| `git_custodian` | `e36d1bf` | R3 | `git_inspect`, `read`, and `merge` — one mutating class, nothing else |
+
+A merge still needs a FounderGrant whose `qualified_operations` names the exact
+`{type: "pull_request", id: "<repo>#<n>"}` with rollback, preflight and
+postflight, or one `scope_once` founder approval. The ALLOW is bound to repo,
+PR, base branch, candidate head and base-before through `precondition_hash`, to
+the facts nonce, and to the attested source SHA, and is consumed once. No
+`force_push`, `history_rewrite`, tag, deploy or delete class is ratified or
+registered for either component.

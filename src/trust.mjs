@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { hashCanonical, isSha256Hex } from "./canonical.mjs";
 import { ACTION_CLASS_TIERS, RISK_TIERS } from "./risk.mjs";
+import { RatificationError, validateRatification } from "./ratification.mjs";
 
 // Trusted decision configuration. Everything here is authority-side state:
 // approver identities and secrets, component identity pins, the tool/operation
@@ -259,9 +260,31 @@ export function validateTrustConfig(config) {
   }
 
   if (config.runtime.mutation_ratified !== false) {
-    // The mutation path is not ratified. A config that claims otherwise is
-    // rejected until ratification lands as its own reviewed change.
+    // The boolean stays refused, permanently. It was a switch that would have
+    // unsealed every mutating class at once, and nothing needs it: ratification
+    // is the signed, scoped, expiring artifact below. A config claiming the
+    // boolean is still rejected, so no edit to an existing config can unseal
+    // anything, and the adversarial court that pins this keeps passing.
     throw new TrustConfigError("runtime.mutation_ratified must be false: mutation path is not ratified.");
+  }
+
+  // Optional, and narrowing. Absent means the surface behaves exactly as it did
+  // before ratification existed: in live mode every non-R0 class stays sealed.
+  if (config.runtime.mutation_ratification !== undefined) {
+    try {
+      validateRatification(config.runtime.mutation_ratification, config);
+    } catch (error) {
+      if (error instanceof RatificationError) {
+        throw new TrustConfigError(error.message);
+      }
+
+      throw error;
+    }
+  }
+
+  if (config.ratification_max_ttl_seconds !== undefined
+      && (!Number.isSafeInteger(config.ratification_max_ttl_seconds) || config.ratification_max_ttl_seconds <= 0)) {
+    throw new TrustConfigError("ratification_max_ttl_seconds must be a positive integer when provided.");
   }
 
   return config;

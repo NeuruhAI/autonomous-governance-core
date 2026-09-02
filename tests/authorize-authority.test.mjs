@@ -428,18 +428,47 @@ test("the adoption trust config on disk is the qualified one and stays narrow", 
   assert.equal(qualified.length, 1, "exactly one qualified Founder Runtime identity");
   assert.ok(!pinned.includes("*"), "no wildcard identity");
 
+  const { ACTION_CLASS_TIERS, riskRank } = await import("../src/risk.mjs");
+  const { MAX_RATIFIABLE_TIER } = await import("../src/ratification.mjs");
+
+  // T03 widened this component from observe-only to bounded internal work, so
+  // the guard widens with it — and stays a guard. The Founder Runtime may now
+  // reach R2 (bounded, reversible, feature-branch development) and no further;
+  // every class it may present must sit at or below that ceiling, so nothing
+  // external, spending or destructive can be admitted here quietly.
   const component = raw.components.founder_runtime;
 
-  assert.equal(component.max_authority_class, "A0");
-  assert.equal(component.max_risk_tier, "R0");
-  assert.deepEqual(component.capabilities, ["observe"]);
-  assert.equal(raw.runtime.mutation_ratified, false, "mutation stays unratified");
-
-  // Every admitted action class must be an observation class: this component is
-  // trusted to look, and the config must not be able to say otherwise quietly.
-  const { ACTION_CLASS_TIERS } = await import("../src/risk.mjs");
+  assert.equal(component.max_authority_class, "A4");
+  assert.equal(component.max_risk_tier, "R2");
+  assert.deepEqual(component.capabilities, ["observe", "write"]);
 
   for (const actionClass of component.allowed_action_classes) {
-    assert.equal(ACTION_CLASS_TIERS[actionClass], "R0", actionClass + " is not an observation class");
+    assert.ok(actionClass in ACTION_CLASS_TIERS, actionClass + " is not a known action class");
+    assert.ok(riskRank(ACTION_CLASS_TIERS[actionClass]) <= riskRank("R2"),
+      actionClass + " (" + ACTION_CLASS_TIERS[actionClass] + ") is above the Founder Runtime ceiling");
   }
+
+  // The promotion executor is registered for exactly one mutating operation.
+  const custodian = raw.components.git_custodian;
+
+  assert.ok(custodian, "git_custodian is registered");
+  assert.equal(custodian.max_risk_tier, "R3");
+  assert.deepEqual(custodian.allowed_action_classes.filter(
+    (cls) => ACTION_CLASS_TIERS[cls] !== "R0"), ["merge"],
+    "the only mutating class the custodian may present is merge");
+  assert.ok(raw.expected_source_shas.git_custodian, "the custodian identity is pinned");
+
+  // Neither component may ever reach external consequence or destruction, and
+  // the ratification that unseals live mutation cannot name those tiers either.
+  for (const id of ["founder_runtime", "git_custodian"]) {
+    assert.ok(riskRank(raw.components[id].max_risk_tier) <= riskRank(MAX_RATIFIABLE_TIER),
+      id + " is trusted above the ratifiable ceiling");
+  }
+
+  assert.equal(raw.runtime.mutation_ratified, false, "the ratified boolean stays false, permanently");
+
+  // The shipped config carries no ratification: it is a signed artifact the
+  // founder mints at launch against the real secret, never a committed one.
+  assert.equal(raw.runtime.mutation_ratification, undefined,
+    "no ratification is committed to the repository");
 });
