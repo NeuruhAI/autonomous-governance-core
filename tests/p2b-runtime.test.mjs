@@ -13,13 +13,17 @@ import { verifyChain } from "../src/receipts.mjs";
 import { canonicalCanaryRequest } from "../scripts/p2b-canary-decision-probe.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
-// Current qualified Founder Runtime lineage; the prior pin is retained in
+// Current qualified Founder Runtime lineage. T03 advanced it again: the
+// runtime that carries the approval resolver is the qualified identity, and
+// every earlier pin — including the T39 one this replaces — is retained in
 // source_lineage as superseded and must fail closed with a precise reason.
-const RE_SHA = "520ae4381def8be52486935e1b9c53da31e52202";
+const RE_SHA = "fae23008e910b0a93eea31cd3eef36d6adb6b7a6";
 const RE_SHA_SUPERSEDED = "a08f4abb908db02db1829730790140946504450c";
-// The pin T31B superseded. It was the qualified identity until the Founder
-// Runtime advanced; a request still presenting it must now be denied precisely.
+// A pin an earlier lane superseded, and the pin T03 superseded. Both were the
+// qualified identity once; a request still presenting either must now be denied
+// precisely, naming the identity that replaced it.
 const RE_SHA_PRIOR_PIN = "e64c545adccf47394b1e45e860751816753617b4";
+const RE_SHA_T39_PIN = "520ae4381def8be52486935e1b9c53da31e52202";
 const GOV_SHA = () => execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"]).toString().trim();
 
 function canonicalConfig() {
@@ -81,7 +85,7 @@ test("stale runtime identity fails closed with the precise superseded reason", (
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
-  assert.match(decision.reasons[0], /superseded by 520ae4381def8be52486935e1b9c53da31e52202/);
+  assert.match(decision.reasons[0], /superseded by fae23008e910b0a93eea31cd3eef36d6adb6b7a6/);
   assert.match(decision.reasons[0], /never falsified/);
 });
 
@@ -92,7 +96,7 @@ test("the pin T31B superseded is itself denied precisely", () => {
   const decision = decideRequest(runtime, request);
   assert.equal(decision.decision, "deny");
   assert.equal(decision.reason_code, "SOURCE_SHA_SUPERSEDED");
-  assert.match(decision.reasons[0], /superseded by 520ae4381def8be52486935e1b9c53da31e52202/);
+  assert.match(decision.reasons[0], /superseded by fae23008e910b0a93eea31cd3eef36d6adb6b7a6/);
 });
 
 test("current qualified runtime identity passes", () => {

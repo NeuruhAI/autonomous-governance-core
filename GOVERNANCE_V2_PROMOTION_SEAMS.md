@@ -31,7 +31,11 @@ already handle these answers honestly: the resolver parks the mission with the
 reason surfaced (`UNRESOLVED`, never `BLOCKED_POLICY` for identity/ratification
 denials); the executor refuses with the reason and merges nothing.
 
-## Founder gates (each is a Governance canonical change; none is made here)
+## Founder gates — CLOSED by the T03 ratification change (see GOVERNANCE_V2_POLICY_MATRIX.md)
+
+All four were implemented in `feat/mutation-ratification-20260902`. Kept below as the record of what each one was.
+
+### Original gate list
 
 1. **Re-qualify the Founder Runtime lineage** to the SHA that ships the
    resolver (`source_lineage.founder_runtime`: mark `520ae43` superseded_by the
