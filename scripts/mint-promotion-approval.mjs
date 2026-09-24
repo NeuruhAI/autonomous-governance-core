@@ -1,39 +1,15 @@
 #!/usr/bin/env node
 // Mint ONE scope_once founder approval for ONE promotion prompt. FOUNDER-RUN.
 //
-// This is the human half of the promotion seam. When the live surface answers a
-// git_custodian merge with `founder_required` (reason FOUNDER_REQUIRED_NO_GRANT),
-// its receipt carries a `founder_prompt` whose `scope_key` names the exact
-// action coordinates (lane, action class, pull request, repository, base
-// branch). The founder decides, and this script turns that decision into the
-// only artifact Governance will accept for it: a gov.founder.approval.v1 in
-// mode `scope_once`, HMAC-signed with the founder secret, bound to
-//
-//   scope_key    the prompt's exact scope (never a wildcard, never a pattern)
-//   source_sha   the executor identity the decision is made about
-//   risk_tier    the classified tier (R3 for a protected-branch merge)
-//   nonce        consumed exactly once through the nonce ledger
-//   issued_at / expires_at   a window no longer than approval_max_ttl_seconds
-//
-// It is non-transferable across pull requests (APPROVAL_CONTENT_MISMATCH),
-// across executor versions (APPROVAL_SOURCE_MISMATCH) and across time, and it
-// never opens a session scope. The signed output goes into the promotion
-// packet's optional `founder_approval` field; the executor presents it
-// unchanged on its fresh /v2/authorize and merges only on the bound ALLOW.
-//
-//   GOVERNANCE_FOUNDER_SECRET=... node scripts/mint-promotion-approval.mjs \
-//     --receipt <authorize receipt JSON carrying founder_prompt> \
-//     --source-sha <40-hex executor identity> \
-//     [--risk-tier R3] [--ttl-seconds 900] [--approver founder] \
-//     [--config <trust config to validate against>]
-//
-// `--scope-key <sha256hex>` may replace `--receipt`. With `--config` the
-// approval is verified against the real verifier before it is printed, with
-// the founder secret stamped into a throwaway probe of that config; nothing is
-// written anywhere.
+// The approval is signed from a founder secret supplied through a 0600
+// --secret-file and validated against the unmodified trust config supplied by
+// --config. The environment variable is deliberately forbidden so a stale,
+// inherited, or accidentally logged process environment can never become the
+// signing source.
 //
 // Never committed with a signature, never printed with the secret, never
-// minted for a lane the approver is (SELF_APPROVAL is refused by the verifier).
+// minted for R4/R5, and never widened beyond the exact prompted scope.
+
 import fs from "node:fs";
 import { randomBytes } from "node:crypto";
 import {
@@ -53,10 +29,33 @@ function refuse(message) {
   process.exit(1);
 }
 
-const secret = process.env.GOVERNANCE_FOUNDER_SECRET;
+if (process.env.GOVERNANCE_FOUNDER_SECRET !== undefined) {
+  refuse("GOVERNANCE_FOUNDER_SECRET is set; the key is read from --secret-file only (unset it)");
+}
 
+const secretFile = arg("secret-file", null);
+const configPath = arg("config", null);
+if (!secretFile) refuse("--secret-file is required; a founder approval is signed, not configured");
+if (!configPath) refuse("--config is required; the artifact is validated against the real trust config");
+
+let secret;
+try {
+  const stat = fs.lstatSync(secretFile);
+  if (!stat.isFile()) refuse("--secret-file must be a regular file");
+  if (stat.mode & 0o077) refuse("--secret-file must not be readable by group or other (chmod 600)");
+  secret = fs.readFileSync(secretFile, "utf8").trim();
+} catch (error) {
+  refuse("cannot read --secret-file: " + error.code);
+}
 if (!secret || secret.length < 16 || secret === "RESOLVED_AT_LAUNCH") {
-  refuse("GOVERNANCE_FOUNDER_SECRET is required; a founder approval is signed, not configured");
+  refuse("--secret-file must contain a real founder secret (>=16 chars, not the placeholder)");
+}
+
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch (error) {
+  refuse("cannot read --config: " + error.message);
 }
 
 const approver = arg("approver", "founder");
@@ -65,7 +64,6 @@ let scopeKey = arg("scope-key", null);
 const sourceSha = String(arg("source-sha", "")).toLowerCase();
 let riskTier = arg("risk-tier", null);
 const ttlSeconds = Number(arg("ttl-seconds", "900"));
-const configPath = arg("config", null);
 
 if (receiptPath) {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
@@ -121,22 +119,22 @@ const unsigned = {
 
 const approval = signFounderApproval(unsigned, secret);
 
-if (configPath) {
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const probe = JSON.parse(JSON.stringify(config));
-  probe.approvers = probe.approvers || {};
-  probe.approvers[approver] = { secret, enhanced: true };
+const check = verifyFounderApproval(
+  approval,
+  {
+    facts_hash: null,
+    scope_key: scopeKey,
+    risk_tier: riskTier,
+    source_sha: sourceSha,
+    lane: "(unknown until presented)",
+    component: "(unknown until presented)"
+  },
+  config,
+  nowMs
+);
 
-  const check = verifyFounderApproval(
-    approval,
-    { facts_hash: null, scope_key: scopeKey, risk_tier: riskTier, source_sha: sourceSha, lane: "(unknown until presented)", component: "(unknown until presented)" },
-    probe,
-    nowMs
-  );
-
-  if (!check.ok) {
-    refuse(check.reason_code + ": " + check.detail);
-  }
+if (!check.ok) {
+  refuse(check.reason_code + ": " + check.detail);
 }
 
 console.log(JSON.stringify(approval, null, 2));
