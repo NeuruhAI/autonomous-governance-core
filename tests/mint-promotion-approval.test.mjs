@@ -1,8 +1,4 @@
-// scripts/mint-promotion-approval.mjs — the founder's one-shot answer to a
-// promotion prompt. Courted against the real authorizeAction: the minted
-// approval lifts exactly the prompted scope, once, on the attested source, and
-// nothing else; the script refuses to mint without the secret, without a
-// prompt, or at a tier that is never delegable.
+// scripts/mint-promotion-approval.mjs — founder one-shot approval CLI court.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -43,8 +39,26 @@ function promotionFacts(nowMs, pr = 13) {
   });
 }
 
-function mint(args, env = { GOVERNANCE_FOUNDER_SECRET: FOUNDER_SECRET }) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined, ...env }, encoding: "utf8" });
+function secureSecretFile(dir) {
+  const file = path.join(dir, "founder.secret");
+  fs.writeFileSync(file, FOUNDER_SECRET, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
+  return file;
+}
+
+function mint(args, { envSecret = false } = {}) {
+  const dir = tempDir();
+  const secretFile = secureSecretFile(dir);
+  const extraEnv = envSecret ? { GOVERNANCE_FOUNDER_SECRET: FOUNDER_SECRET } : { GOVERNANCE_FOUNDER_SECRET: undefined };
+  const result = spawnSync(process.execPath, [
+    SCRIPT,
+    ...args,
+    "--secret-file", secretFile,
+  ], {
+    env: { ...process.env, ...extraEnv },
+    encoding: "utf8"
+  });
+  return { ...result, secretFile };
 }
 
 function promptedRuntime() {
@@ -59,16 +73,34 @@ function promptedRuntime() {
   fs.writeFileSync(receiptPath, JSON.stringify(prompted));
   const configPath = path.join(dir, "trust.json");
   fs.writeFileSync(configPath, JSON.stringify(built.config));
-  return { ...built, nowMs, prompted, receiptPath, configPath };
+  const secretFile = secureSecretFile(dir);
+  return { ...built, nowMs, prompted, receiptPath, configPath, secretFile };
+}
+
+function mintPrompted(prompted, args = []) {
+  return spawnSync(process.execPath, [
+    SCRIPT,
+    "--receipt", prompted.receiptPath,
+    "--source-sha", args.sourceSha || WORKERS_SHA,
+    "--config", prompted.configPath,
+    "--secret-file", prompted.secretFile,
+    ...(args.extra || [])
+  ], {
+    env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined },
+    encoding: "utf8"
+  });
 }
 
 test("minted scope_once approval lifts the prompted promotion exactly once, on the attested source only", () => {
-  const { runtime, nowMs, clock, receiptPath, configPath } = promptedRuntime();
+  const { runtime, nowMs, clock, receiptPath, configPath, secretFile } = promptedRuntime();
 
-  const minted = mint(["--receipt", receiptPath, "--source-sha", WORKERS_SHA, "--config", configPath]);
+  const minted = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA,
+    "--config", configPath, "--secret-file", secretFile
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined }, encoding: "utf8" });
+
   assert.equal(minted.status, 0, minted.stderr);
   const approval = JSON.parse(minted.stdout);
-  // The founder signs in real time; the courted surface's clock moves past that moment.
   clock.ms = Date.parse(approval.bound.issued_at) + 1000;
   assert.equal(approval.schema_version, "gov.founder.approval.v1");
   assert.equal(approval.mode, "scope_once");
@@ -76,26 +108,26 @@ test("minted scope_once approval lifts the prompted promotion exactly once, on t
   assert.equal(approval.bound.risk_tier, "R3");
   assert.ok(!minted.stdout.includes(FOUNDER_SECRET) && !minted.stderr.includes(FOUNDER_SECRET), "secret never printed");
 
-  // wrong pull request: the approval is bound to the prompted scope, not to the lane
   const other = authorizeAction(runtime, promotionFacts(nowMs, 14), { founder_approval: approval });
   assert.equal(other.decision, "deny");
   assert.equal(other.reason_code, "APPROVAL_CONTENT_MISMATCH");
 
-  // the prompted scope: allowed, receipted, consumed
   const allowed = authorizeAction(runtime, promotionFacts(nowMs), { founder_approval: approval });
   assert.equal(allowed.decision, "allow");
   assert.equal(allowed.reason_code, "FOUNDER_APPROVED_SCOPE_ONCE");
   assert.equal(allowed.execution, "NOT_CLAIMED_BY_GOVERNANCE");
 
-  // one-shot: the same artifact never authorizes a second merge
   const replay = authorizeAction(runtime, promotionFacts(nowMs), { founder_approval: approval });
   assert.equal(replay.decision, "deny");
   assert.equal(replay.reason_code, "NONCE_REPLAYED");
 });
 
 test("an approval minted for another executor version is void for the one that presents", () => {
-  const { runtime, nowMs, clock, receiptPath } = promptedRuntime();
-  const minted = mint(["--receipt", receiptPath, "--source-sha", OTHER_SHA]);
+  const { runtime, nowMs, clock, receiptPath, configPath, secretFile } = promptedRuntime();
+  const minted = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", OTHER_SHA,
+    "--config", configPath, "--secret-file", secretFile
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined }, encoding: "utf8" });
   assert.equal(minted.status, 0, minted.stderr);
   const approval = JSON.parse(minted.stdout);
   clock.ms = Date.parse(approval.bound.issued_at) + 1000;
@@ -104,43 +136,58 @@ test("an approval minted for another executor version is void for the one that p
   assert.equal(result.reason_code, "APPROVAL_SOURCE_MISMATCH");
 });
 
-test("refuses to mint without the founder secret, without a prompt, or at a non-delegable tier", () => {
-  const { receiptPath, configPath } = promptedRuntime();
+test("refuses environment signing, missing inputs, insecure secret files, and non-delegable tiers", () => {
+  const { receiptPath, configPath, secretFile } = promptedRuntime();
 
-  const noSecret = mint(["--receipt", receiptPath, "--source-sha", WORKERS_SHA], {});
-  assert.equal(noSecret.status, 1);
-  assert.match(noSecret.stderr, /GOVERNANCE_FOUNDER_SECRET is required/);
+  const envSecret = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA,
+    "--config", configPath, "--secret-file", secretFile
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: FOUNDER_SECRET }, encoding: "utf8" });
+  assert.equal(envSecret.status, 1);
+  assert.match(envSecret.stderr, /GOVERNANCE_FOUNDER_SECRET is set/);
 
-  const noPrompt = mint(["--source-sha", WORKERS_SHA]);
-  assert.equal(noPrompt.status, 1);
-  assert.match(noPrompt.stderr, /scope-key/);
+  const noSecretFile = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA, "--config", configPath
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined }, encoding: "utf8" });
+  assert.equal(noSecretFile.status, 1);
+  assert.match(noSecretFile.stderr, /--secret-file is required/);
 
-  const badSha = mint(["--receipt", receiptPath, "--source-sha", "not-a-sha"]);
+  const noConfig = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA, "--secret-file", secretFile
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined }, encoding: "utf8" });
+  assert.equal(noConfig.status, 1);
+  assert.match(noConfig.stderr, /--config is required/);
+
+  const badSha = mintPrompted({ receiptPath, configPath, secretFile }, { sourceSha: "not-a-sha" });
   assert.equal(badSha.status, 1);
   assert.match(badSha.stderr, /source-sha/);
 
-  const r4 = mint(["--receipt", receiptPath, "--source-sha", WORKERS_SHA, "--risk-tier", "R4"]);
+  const r4 = mintPrompted({ receiptPath, configPath, secretFile }, { extra: ["--risk-tier", "R4"] });
   assert.equal(r4.status, 1);
   assert.match(r4.stderr, /R4\/R5/);
 
-  // a receipt that never prompted (an allow) carries no scope to approve
   const dir = tempDir();
-  const allowReceipt = path.join(dir, "allow.json");
-  fs.writeFileSync(allowReceipt, JSON.stringify({ decision: "allow", founder_prompt: null }));
-  const notPrompted = mint(["--receipt", allowReceipt, "--source-sha", WORKERS_SHA]);
-  assert.equal(notPrompted.status, 1);
-  assert.match(notPrompted.stderr, /founder_prompt/);
+  const looseSecret = path.join(dir, "loose.secret");
+  fs.writeFileSync(looseSecret, FOUNDER_SECRET, { mode: 0o644 });
+  const loose = spawnSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA,
+    "--config", configPath, "--secret-file", looseSecret
+  ], { env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined }, encoding: "utf8" });
+  assert.equal(loose.status, 1);
+  assert.match(loose.stderr, /not be readable by group or other/);
 
-  // --config validation catches a TTL the surface would refuse
-  const tooLong = mint(["--receipt", receiptPath, "--source-sha", WORKERS_SHA, "--ttl-seconds", "999999", "--config", configPath]);
+  const tooLong = mintPrompted({ receiptPath, configPath, secretFile }, { extra: ["--ttl-seconds", "999999"] });
   assert.equal(tooLong.status, 1);
   assert.match(tooLong.stderr, /APPROVAL_TTL_EXCEEDED/);
 });
 
-test("the script is executable as a founder CLI and prints only the artifact on stdout", () => {
-  const { receiptPath } = promptedRuntime();
-  const out = execFileSync(process.execPath, [SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA], {
-    env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: FOUNDER_SECRET },
+test("the founder CLI prints only the approval artifact on stdout", () => {
+  const { receiptPath, configPath, secretFile } = promptedRuntime();
+  const out = execFileSync(process.execPath, [
+    SCRIPT, "--receipt", receiptPath, "--source-sha", WORKERS_SHA,
+    "--config", configPath, "--secret-file", secretFile
+  ], {
+    env: { ...process.env, GOVERNANCE_FOUNDER_SECRET: undefined },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
   });
