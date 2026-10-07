@@ -12,6 +12,7 @@ import {
   riskRank
 } from "./risk.mjs";
 import { grantAdmits, grantQualifiesOperation, verifyGrant } from "./grants.mjs";
+import { ratificationAdmits } from "./ratification.mjs";
 import { classifyPathSensitivity, pathLexicalErrors, resolveRealTargetPath } from "./pathscope.mjs";
 
 // The risk-scoped authorization boundary (Governance V2). It governs
@@ -509,11 +510,17 @@ export function authorizeAction(runtime, facts, { grant, founder_approval } = {}
   // so a FounderGrant could authorize exactly what the seal exists to refuse.
   // No grant and no approval is consulted before it: the seal is not a
   // permission question.
-  if (config.runtime.mode === "live" && ACTION_CLASS_TIERS[facts.action_class] !== "R0" && config.runtime.mutation_ratified !== true) {
-    return deny("MUTATION_NOT_RATIFIED", factsHash, [
-      "Live mutation is not ratified in this trust configuration; action class " +
-        facts.action_class + " is mutating."
-    ], base);
+  if (config.runtime.mode === "live" && ACTION_CLASS_TIERS[facts.action_class] !== "R0") {
+    // Ratification is tested against the CLASSIFIED tier, not the action
+    // class's baseline, so every escalator still closes the seal on a ratified
+    // class: force, secret access, a broad blast radius, an irreversible
+    // action, any externality or spend, a governance-canonical path. Ratifying
+    // git_commit does not ratify a forced push.
+    const ratified = ratificationAdmits(config, facts, risk.tier, nowMs);
+
+    if (!ratified.ok) {
+      return deny("MUTATION_NOT_RATIFIED", factsHash, [ratified.detail], base);
+    }
   }
 
   // ---- Presented grants are verified here, before any tier can allow.
